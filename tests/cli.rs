@@ -938,3 +938,170 @@ fn named_pipe_input_keeps_streaming_range_semantics() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, stdin.stdout);
 }
+
+#[test]
+fn live_jsonl_emits_findings_while_stdin_is_open() {
+    use std::io::BufRead;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_binsith"))
+        .args(["--live-jsonl", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    stdin.write_all(b"https://example.com\0").unwrap();
+    stdin.flush().unwrap();
+    let start = rx.recv_timeout(Duration::from_secs(10));
+    let finding = rx.recv_timeout(Duration::from_secs(10));
+    let still_running = child.try_wait().unwrap().is_none();
+    drop(stdin);
+    if start.is_err() || finding.is_err() {
+        let _ = child.kill();
+    }
+    let output = child.wait_with_output().unwrap();
+    reader.join().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(still_running);
+    let parse = |line: String| serde_json::from_str::<serde_json::Value>(&line).unwrap();
+    assert_eq!(parse(start.unwrap().unwrap())["type"], "start");
+    let finding = parse(finding.unwrap().unwrap());
+    assert_eq!(finding["type"], "string");
+    assert_eq!(finding["data"]["value"], "https://example.com");
+    let rest: Vec<_> = rx.into_iter().map(|l| parse(l.unwrap())).collect();
+    assert_eq!(rest[0]["type"], "summary");
+    assert_eq!(rest[0]["file_summary"]["size_bytes"], 20);
+    assert_eq!(rest.last().unwrap()["type"], "complete");
+}
+
+#[test]
+fn live_jsonl_matches_regular_results_and_range_summary() {
+    for input in [
+        b"skiphttps://example.com\0tail".as_slice(),
+        b"skip",
+        b"skip\xff\xfeh\0i\0!\0!\0",
+    ] {
+        let flags = ["--jsonl", "-s", "--offset", "4", "--length", "100", "-"];
+        let parse = |output: Output| {
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let regular = parse(run(&flags, input));
+        let mut live_flags = flags.to_vec();
+        live_flags.push("--live-jsonl");
+        let live = parse(run(&live_flags, input));
+        assert_eq!(live[0]["type"], "start");
+        assert_eq!(&regular[0], &live[live.len() - 2]);
+        let strings = |events: Vec<serde_json::Value>| {
+            events
+                .into_iter()
+                .filter(|e| e["type"] == "string")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strings(regular), strings(live));
+    }
+}
+
+#[test]
+fn live_combined_modes_and_named_report_complete_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("sample.bin");
+    let report = dir.path().join("report.jsonl");
+    std::fs::write(&input, b"https://example.com\0h\0e\0l\0l\0o\0").unwrap();
+    let output = run(
+        &[
+            input.to_str().unwrap(),
+            "--live-jsonl",
+            "--scan-utf16",
+            "--entropy",
+            "--compare",
+            input.to_str().unwrap(),
+            "--summary",
+            "--hexdump",
+            "-j",
+            report.to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(&report)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    for kind in [
+        "start",
+        "string",
+        "entropy",
+        "comparison",
+        "summary",
+        "complete",
+    ] {
+        assert!(events.iter().any(|e| e["type"] == kind), "{kind}");
+    }
+    assert_eq!(events[events.len() - 2]["type"], "summary");
+    assert_eq!(events.last().unwrap()["data"]["processing_complete"], true);
+    let prior = std::fs::read(&report).unwrap();
+    let failed = run(
+        &[
+            "--live-jsonl",
+            "--encoding",
+            "utf16be",
+            "-j",
+            report.to_str().unwrap(),
+            "-",
+        ],
+        b"\xff\xfea\0b\0",
+    );
+    assert!(!failed.status.success());
+    assert_eq!(std::fs::read(report).unwrap(), prior);
+}
+
+#[test]
+fn live_failure_has_no_completion_and_limits_keep_exit_policy() {
+    let failure = run(
+        &["--live-jsonl", "--encoding", "utf16be", "-"],
+        b"\xff\xfea\0b\0",
+    );
+    assert!(!failure.status.success());
+    let text = String::from_utf8(failure.stdout).unwrap();
+    assert!(text.contains("start"));
+    assert!(!text.contains("\"type\":\"complete\""));
+    let limited = run(
+        &[
+            "--live-jsonl",
+            "--max-string-bytes",
+            "4",
+            "--inconclusive-exit-code",
+            "9",
+            "-",
+        ],
+        b"https://example.com",
+    );
+    assert_eq!(limited.status.code(), Some(9));
+    let last: serde_json::Value = serde_json::from_str(
+        String::from_utf8(limited.stdout)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(last["data"]["analysis_coverage"]["status"], "limited");
+}

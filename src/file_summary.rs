@@ -18,50 +18,79 @@ pub fn summarize(file_path: &str, content: &[u8]) -> FileSummary {
 
 pub fn summarize_reader(
     file_path: &str,
-    mut reader: impl std::io::Read,
+    reader: impl std::io::Read,
 ) -> std::io::Result<FileSummary> {
-    let mut frequencies = [0u64; 256];
-    let mut md5 = md5::Context::new();
-    let mut sha256 = Sha256::new();
-    let mut size = 0u64;
-    let mut prefix = Vec::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let count = match reader.read(&mut buffer) {
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            result => result?,
-        };
-        if count == 0 {
-            break;
+    let mut observed = SummaryReader::new(reader, None);
+    std::io::copy(&mut observed, &mut std::io::sink())?;
+    Ok(observed.finish(file_path).0)
+}
+
+/// Accumulates the summary during analysis; optional snapshot supports later passes.
+pub struct SummaryReader<R> {
+    reader: R,
+    snapshot: Option<std::fs::File>,
+    frequencies: [u64; 256],
+    md5: md5::Context,
+    sha256: Sha256,
+    size: u64,
+    prefix: Vec<u8>,
+}
+impl<R> SummaryReader<R> {
+    pub fn new(reader: R, snapshot: Option<std::fs::File>) -> Self {
+        Self {
+            reader,
+            snapshot,
+            frequencies: [0; 256],
+            md5: md5::Context::new(),
+            sha256: Sha256::new(),
+            size: 0,
+            prefix: Vec::new(),
         }
-        let bytes = &buffer[..count];
-        size += count as u64;
-        for &byte in bytes {
-            frequencies[byte as usize] += 1;
-        }
-        prefix.extend_from_slice(&bytes[..count.min(8192 - prefix.len())]);
-        md5.consume(bytes);
-        sha256.update(bytes);
     }
-    let entropy = frequencies
-        .iter()
-        .filter(|&&n| n > 0)
-        .map(|&n| {
-            let p = n as f64 / size as f64;
-            -p * p.log2()
-        })
-        .sum();
-    Ok(FileSummary {
-        file_path: file_path.into(),
-        size_bytes: size,
-        mime_type: infer::get(&prefix)
-            .map(|t| t.mime_type())
-            .unwrap_or("Unknown")
-            .into(),
-        md5: format!("{:x}", md5.compute()),
-        sha256: format!("{:x}", sha256.finalize()),
-        entropy,
-    })
+    pub fn finish(self, file_path: &str) -> (FileSummary, Option<std::fs::File>) {
+        let entropy = self
+            .frequencies
+            .iter()
+            .filter(|&&n| n > 0)
+            .map(|&n| {
+                let p = n as f64 / self.size as f64;
+                -p * p.log2()
+            })
+            .sum();
+        (
+            FileSummary {
+                file_path: file_path.into(),
+                size_bytes: self.size,
+                mime_type: infer::get(&self.prefix)
+                    .map(|t| t.mime_type())
+                    .unwrap_or("Unknown")
+                    .into(),
+                md5: format!("{:x}", self.md5.compute()),
+                sha256: format!("{:x}", self.sha256.finalize()),
+                entropy,
+            },
+            self.snapshot,
+        )
+    }
+}
+impl<R: std::io::Read> std::io::Read for SummaryReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::Write;
+        let count = self.reader.read(buffer)?;
+        let bytes = &buffer[..count];
+        if let Some(snapshot) = &mut self.snapshot {
+            snapshot.write_all(bytes)?;
+        }
+        self.size += count as u64;
+        for &byte in bytes {
+            self.frequencies[byte as usize] += 1;
+        }
+        self.prefix
+            .extend_from_slice(&bytes[..count.min(8192 - self.prefix.len())]);
+        self.md5.consume(bytes);
+        self.sha256.update(bytes);
+        Ok(count)
+    }
 }
 
 impl std::fmt::Display for FileSummary {
