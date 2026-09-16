@@ -1214,3 +1214,179 @@ fn unreadable_input_never_publishes_a_complete_report() {
         assert_ne!(event["type"], "complete");
     }
 }
+
+#[test]
+fn indicator_export_deduplicates_raw_and_decoded_evidence() {
+    use base64::Engine;
+    let value = "https://example.com";
+    let token = base64::engine::general_purpose::STANDARD.encode(value);
+    let input = format!("{value}\0{value}\0config={token}");
+    let output = run(
+        &["--export-indicators", "-", "--category", "URL", "-"],
+        input.as_bytes(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = json["indicators"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    let indicator = &entries[0];
+    assert_eq!(indicator["value"], value);
+    assert_eq!(indicator["validation_status"], "validated");
+    assert_eq!(indicator["observed_occurrences"], 3);
+    let locations = indicator["locations"].as_array().unwrap();
+    assert_eq!(locations.len(), 3);
+    assert_eq!(locations[0]["source_offset"], 0);
+    assert_eq!(locations[1]["source_offset"], value.len() + 1);
+    assert_eq!(locations[2]["source_offset"], (value.len() + 1) * 2 + 7);
+    assert_eq!(locations[2]["source_end_offset"], input.len());
+    assert_eq!(locations[2]["decode_depth"], 1);
+    assert_eq!(locations[2]["decoded_offset"], 0);
+    assert_eq!(json["context"]["file_summary"]["size_bytes"], input.len());
+    assert_eq!(json["context"]["export_limited"], false);
+}
+
+#[test]
+fn indicator_export_preserves_empty_limited_and_invalid_results() {
+    let run_export = |flags: &[&str], input: &[u8]| {
+        let mut args = vec!["--export-indicators", "-", "-"];
+        args.extend_from_slice(flags);
+        let output = run(&args, input);
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output, json)
+    };
+    let (_, empty) = run_export(&[], b"");
+    assert_eq!(empty["indicators"], serde_json::json!([]));
+    assert_eq!(empty["context"]["processing_complete"], true);
+    let (output, limited) = run_export(
+        &["--max-string-bytes", "4", "--inconclusive-exit-code", "9"],
+        b"https://example.com",
+    );
+    assert_eq!(output.status.code(), Some(9));
+    assert_eq!(limited["context"]["analysis_coverage"]["status"], "limited");
+    let (_, invalid) = run_export(&["--category", "credit_card"], b"4111111111111112");
+    assert_eq!(invalid["indicators"][0]["validation_status"], "invalid");
+    let input = "https://example.com\0".repeat(65);
+    let (_, capped) = run_export(&["--category", "URL"], input.as_bytes());
+    assert_eq!(capped["indicators"][0]["observed_occurrences"], 65);
+    assert_eq!(
+        capped["indicators"][0]["locations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(capped["context"]["export_limited"], true);
+    assert_eq!(
+        capped["context"]["analysis_coverage"]["limitations"]["indicator_export_limited"],
+        true
+    );
+}
+
+#[test]
+fn export_destinations_are_validated_and_failures_preserve_old_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("export.json");
+    std::fs::write(&path, b"previous export").unwrap();
+    let destination = path.to_str().unwrap();
+    for args in [
+        vec!["--export-indicators", "-", "--jsonl", "-"],
+        vec!["--export-indicators", destination, "-j", destination, "-"],
+        vec![
+            "--export-indicators",
+            destination,
+            "--encoding",
+            "utf16be",
+            "-",
+        ],
+    ] {
+        let output = run(&args, b"\xff\xfea\0b\0");
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous export");
+    }
+    let report = dir.path().join("analysis.json");
+    let output = run(
+        &[
+            "--export-indicators",
+            destination,
+            "-j",
+            report.to_str().unwrap(),
+            "-q",
+            "-",
+        ],
+        b"https://example.com",
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    for file in [&path, &report] {
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+        assert!(json.is_object());
+    }
+}
+
+#[test]
+fn live_export_contains_only_primary_comparison_indicators_and_utf16_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.bin");
+    let export = dir.path().join("indicators.json");
+    std::fs::write(
+        &other,
+        "https://other.example"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let value = "https://example.com";
+    let mut input = vec![0, 0];
+    input.extend(value.encode_utf16().flat_map(u16::to_le_bytes));
+    let output = run(
+        &[
+            "--live-jsonl",
+            "--encoding",
+            "utf16le",
+            "--offset",
+            "2",
+            "--category",
+            "URL",
+            "--compare",
+            other.to_str().unwrap(),
+            "--export-indicators",
+            export.to_str().unwrap(),
+            "-",
+        ],
+        &input,
+    );
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(export).unwrap()).unwrap();
+    assert_eq!(json["indicators"].as_array().unwrap().len(), 1);
+    assert_eq!(json["indicators"][0]["value"], value);
+    assert_eq!(json["indicators"][0]["locations"][0]["source_offset"], 2);
+    assert_eq!(
+        json["indicators"][0]["locations"][0]["source_end_offset"],
+        input.len()
+    );
+    let last: serde_json::Value = serde_json::from_str(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(last["type"], "complete");
+}
+
+#[test]
+fn csv_export_has_context_even_without_indicators() {
+    let output = run(
+        &["--export-indicators", "-", "--export-format", "csv", "-"],
+        b"",
+    );
+    assert!(output.status.success(), "{output:?}");
+    let csv = String::from_utf8(output.stdout).unwrap();
+    assert!(csv.starts_with("\"record_type\",\"category\",\"value\""));
+    assert_eq!(csv.lines().count(), 2);
+    assert!(csv.contains("\"context\""));
+    assert!(csv.contains("\"\"processing_complete\"\":true"));
+}

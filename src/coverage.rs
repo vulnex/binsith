@@ -10,6 +10,7 @@ pub struct Coverage {
     pub decoded_layers_with_omitted_details: usize,
     pub decode_limited_strings: usize,
     pub comparison_limited: bool,
+    pub indicator_export_limited: bool,
 }
 impl Coverage {
     pub fn observe(&mut self, finding: &StringFinding) {
@@ -35,6 +36,7 @@ impl Coverage {
             + self.decode_limited_strings
             > 0
             || self.comparison_limited
+            || self.indicator_export_limited
     }
     pub fn report(&self) -> serde_json::Value {
         serde_json::json!({"status": if self.limited() {"limited"} else {"complete_within_configured_scope"}, "limitations":self,
