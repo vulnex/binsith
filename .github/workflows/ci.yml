@@ -4,6 +4,7 @@ permissions:
   contents: read
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -16,3 +17,6 @@ jobs:
       - run: cargo +stable test --locked
       - run: cargo +stable test --release --locked
       - run: cargo +stable build --release --locked
+      - name: Bounded CLI stress and benchmark smoke
+        if: runner.os == 'Linux'
+        run: python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-smoke.json
