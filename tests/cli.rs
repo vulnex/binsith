@@ -869,3 +869,72 @@ fn custom_url_rules_keep_their_original_span_and_provenance() {
     assert!(version.contains(env!("CARGO_PKG_VERSION")));
     assert!(version.contains(custom["metadata"]["source_sha256"].as_str().unwrap()));
 }
+
+#[test]
+fn regular_file_ranges_match_stdin_at_boundaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("range.bin");
+    for bytes in [b"prefix\0https://example.com\0tail".as_slice(), b""] {
+        std::fs::write(&path, bytes).unwrap();
+        for offset in [0, 1, bytes.len() as u64, bytes.len() as u64 + 1] {
+            for length in [None, Some(0), Some(4), Some(100)] {
+                let offset = offset.to_string();
+                let length = length.map(|n| n.to_string());
+                let mut flags = vec!["-s", "-x", "--min-length", "1", "--offset", &offset];
+                if let Some(length) = &length {
+                    flags.extend(["--length", length]);
+                }
+                flags.push("-");
+                let stdin = run(&flags, bytes);
+                *flags.last_mut().unwrap() = path.to_str().unwrap();
+                let file = run(&flags, b"");
+                assert_eq!(file.status.code(), stdin.status.code());
+                assert_eq!(file.stdout, stdin.stdout);
+                assert_eq!(file.stderr, stdin.stderr);
+            }
+        }
+    }
+}
+
+#[test]
+fn large_sparse_file_range_preserves_absolute_offsets_and_hashes() {
+    use std::io::{Seek, SeekFrom};
+    let mut sample = tempfile::NamedTempFile::new().unwrap();
+    let offset = 1u64 << 30;
+    sample.seek(SeekFrom::Start(offset)).unwrap();
+    sample.write_all(b"https://example.com").unwrap();
+    sample.flush().unwrap();
+    let output = run(
+        &[
+            sample.path().to_str().unwrap(),
+            "-s",
+            "-j",
+            "-",
+            "--offset",
+            &offset.to_string(),
+        ],
+        b"",
+    );
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["file_summary"]["size_bytes"], 19);
+    assert_eq!(
+        json["file_summary"]["md5"],
+        format!("{:x}", md5::compute(b"https://example.com"))
+    );
+    assert_eq!(json["strings"][0]["offset"], offset);
+    assert_eq!(json["strings"][0]["match_details"][0]["offset"], offset);
+}
+
+#[cfg(unix)]
+#[test]
+fn named_pipe_input_keeps_streaming_range_semantics() {
+    let bytes = b"skiphttps://example.com";
+    let output = run(
+        &["/dev/stdin", "-s", "--offset", "4", "--length", "19"],
+        bytes,
+    );
+    let stdin = run(&["-", "-s", "--offset", "4", "--length", "19"], bytes);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, stdin.stdout);
+}
