@@ -1,0 +1,152 @@
+[
+  {
+    "name": "URL",
+    "positive": "visit https://example.com/path?q=1",
+    "negative": "ftp://example.com"
+  },
+  {
+    "name": "Email",
+    "positive": "person@example.com",
+    "negative": "person@example"
+  },
+  {
+    "name": "ip_address",
+    "positive": "address 192.168.1.10",
+    "negative": "address 999.999.999.999"
+  },
+  {
+    "name": "credit_card",
+    "positive": "4111 1111 1111 1111",
+    "negative": "4111 1111 1111"
+  },
+  {
+    "name": "ssn",
+    "positive": "123-45-6789",
+    "negative": "123-456-789"
+  },
+  {
+    "name": "api_key",
+    "positive": "Ab9Ab9Ab9Ab9Ab9Ab9Ab9Ab9Ab9Ab9Ab9Ab9",
+    "negative": "shortToken42"
+  },
+  {
+    "name": "pem_key",
+    "positive": "-----BEGIN PRIVATE KEY-----",
+    "negative": "-----BEGIN CERTIFICATE-----"
+  },
+  {
+    "name": "file_path",
+    "positive": "/usr/local/test.bin",
+    "negative": "relative-name"
+  },
+  {
+    "name": "guid",
+    "positive": "550e8400-e29b-41d4-a716-446655440000",
+    "negative": "550e8400-e29b-41d4-a716"
+  },
+  {
+    "name": "mac",
+    "positive": "00:1A:2B:3C:4D:5E",
+    "negative": "00:1A:2B:3C:4D:ZZ"
+  },
+  {
+    "name": "reg_path",
+    "positive": "HKEY_LOCAL_MACHINE\\Software\\Example",
+    "negative": "HKEY_UNKNOWN\\Software"
+  },
+  {
+    "name": "sid",
+    "positive": "S-1-5-21-1234",
+    "negative": "S-2-5-21-1234"
+  },
+  {
+    "name": "unc",
+    "positive": "\\\\server\\share",
+    "negative": "/server/share"
+  },
+  {
+    "name": "aeon",
+    "positive": "40AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "40AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "bitcoin",
+    "positive": "1AAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "0AAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "bitlocker",
+    "positive": "12345678-1234-1234-1234-1234-1234-1234-1234",
+    "negative": "12345678-1234-1234-1234-1234-1234-1234"
+  },
+  {
+    "name": "bytecoin",
+    "positive": "2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "cardano",
+    "positive": "addr1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "negative": "addr1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "name": "dashcoin",
+    "positive": "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "dashcoin2",
+    "positive": "XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "dogecoin",
+    "positive": "D5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "D0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "ethereum",
+    "positive": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "negative": "0xgggggggggggggggggggggggggggggggggggggggg"
+  },
+  {
+    "name": "fantomcoin",
+    "positive": "60AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "60AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "litecoin",
+    "positive": "LAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "LAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "monero",
+    "positive": "40AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "40AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "polkadot",
+    "positive": "1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "ripple",
+    "positive": "raaaaaaaaaaaaaaaaaaaaaaaa",
+    "negative": "raaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "name": "solana",
+    "positive": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "sumokoin",
+    "positive": "SumoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "SumoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "zcash",
+    "positive": "t1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "negative": "t1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+]
