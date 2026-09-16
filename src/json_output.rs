@@ -7,6 +7,7 @@ pub struct JsonWriter<W: Write> {
     strings_open: bool,
     entropy_open: bool,
     jsonl: bool,
+    live: bool,
 }
 
 impl<W: Write> JsonWriter<W> {
@@ -42,14 +43,51 @@ impl<W: Write> JsonWriter<W> {
             strings_open: strings && !jsonl,
             entropy_open: false,
             jsonl,
+            live: false,
         })
+    }
+    pub fn live(out: W) -> io::Result<Self> {
+        let mut writer = Self {
+            out,
+            first: true,
+            strings_open: false,
+            entropy_open: false,
+            jsonl: true,
+            live: true,
+        };
+        writer.event(
+            "start",
+            &serde_json::json!({"schema_version":1,"mode":"live_jsonl","summary_position":"end"}),
+        )?;
+        Ok(writer)
+    }
+    pub fn summary(
+        &mut self,
+        summary: &FileSummary,
+        offset: u64,
+        requested_length: Option<u64>,
+    ) -> io::Result<()> {
+        serde_json::to_writer(
+            &mut self.out,
+            &serde_json::json!({"type":"summary", "schema_version":1, "file_summary":summary,
+            "scan_range":{"offset":offset,"length":summary.size_bytes,"requested_length":requested_length}}),
+        )?;
+        writeln!(self.out)?;
+        if self.live {
+            self.out.flush()?;
+        }
+        Ok(())
     }
     fn event(&mut self, kind: &str, value: &impl serde::Serialize) -> io::Result<()> {
         serde_json::to_writer(
             &mut self.out,
             &serde_json::json!({"type":kind, "data":value}),
         )?;
-        writeln!(self.out)
+        writeln!(self.out)?;
+        if self.live {
+            self.out.flush()?;
+        }
+        Ok(())
     }
     fn close_arrays(&mut self) -> io::Result<()> {
         if self.strings_open || self.entropy_open {
@@ -151,6 +189,8 @@ mod tests {
                 Err(io::Error::other("disk flush failed"))
             }
         }
+        assert!(JsonWriter::live(Fail { write: true }).is_err());
+        assert!(JsonWriter::live(Fail { write: false }).is_err());
         let summary = crate::file_summary::summarize("fixture", b"abc");
         assert!(JsonWriter::new(Fail { write: true }, &summary, false).is_err());
         let writer = JsonWriter::new(Fail { write: false }, &summary, false).unwrap();

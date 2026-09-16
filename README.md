@@ -150,7 +150,7 @@ Original `decode_status` is `decoded`, `disabled`, `truncated`, `limit`, or
 
 Summaries and entropy use fixed-size read buffers. Hex uses 64 KiB reads with
 16-byte rows. String memory scales with configured caps; embedded scanning holds
-up to four limited prefixes. Combined modes and embedded scanning snapshot the
+up to four limited prefixes. Without `--live-jsonl`, combined modes and embedded scanning snapshot the
 selected input range to private temporary disk storage for consistent passes and
 stdin support. Comparisons also snapshot the selected range of the other file.
 Allow temporary space for those ranges. Other single modes stream directly.
@@ -196,7 +196,7 @@ JSON schema version 1 retains `file_summary` and `strings` (null when not select
 and adds scan-range metadata, decoded layers, optional `entropy_regions` and
 `comparison`, and a final `complete: true`. New fields are additive.
 
-JSON Lines starts with a `summary` event carrying `schema_version`, `file_summary`,
+Standard `--jsonl` output starts with a `summary` event carrying `schema_version`, `file_summary`,
 and `scan_range`, followed by `string`, `entropy`, and/or `comparison` events whose
 payload is under `data`. A final `complete` event confirms successful completion.
 An interrupted stdout stream may contain valid partial events; require that final
@@ -274,3 +274,39 @@ compatibility field containing the first successful decoded token.
 
 The GitHub Actions workflow runs formatting and debug/release tests on Linux,
 macOS, and Windows. Local verification does not imply these remote jobs have run.
+
+
+### Live JSON Lines (0.3.0)
+
+```sh
+binsith --live-jsonl sample.bin
+cat sample.bin | binsith --live-jsonl --category URL -
+```
+
+`--live-jsonl` enables string analysis and JSONL output. Its event order is
+`start`, primary `string` findings, any additional analysis events, `summary`,
+then `complete`. The start event has `data.schema_version: 1`,
+`data.mode: "live_jsonl"`, and `data.summary_position: "end"`. The final summary
+uses the same fields as the standard JSONL summary. Build/configuration metadata
+and analysis coverage remain in the completion event. Existing `--jsonl` and JSON
+reports retain their ordering and behavior.
+
+Each live event is flushed immediately. A string finding is available when its
+run ends (a delimiter or EOF), not while the string is still arriving. Filters
+can suppress findings. Offsets are skipped before scanning starts. Hashes, MIME,
+size, and overall entropy are accumulated during the first pass and emitted only
+after all requested analysis succeeds. `--length` can end the selected range
+without waiting for the source stream to close.
+
+Basic live analysis needs no input snapshot. Embedded UTF-16 scanning, regional
+entropy, comparison, and hex mode capture the selected range during the first
+pass and perform additional passes after that range ends; their results are not
+live during ingestion. These combinations require temporary disk space. Live
+mode emits structured output only; human output, including hex display, is
+suppressed. Avoid selecting hex mode when only the live report is needed.
+
+With `-j PATH`, a named report remains atomic: events go to a temporary sibling
+and the destination is replaced only after successful completion. Use stdout for
+immediate consumption. On failure or interruption, partial stdout events are not
+a completed report; always require the final `complete` event. Existing match and
+inconclusive exit policies apply unchanged.

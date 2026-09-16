@@ -81,6 +81,9 @@ struct Args {
     /// Emit JSON Lines to stdout, or to the -j destination
     #[arg(long)]
     jsonl: bool,
+    /// Live JSON Lines: enable strings, emit findings before EOF, summarize last
+    #[arg(long)]
+    live_jsonl: bool,
     /// Suppress human-readable output
     #[arg(short, long)]
     quiet: bool,
@@ -181,8 +184,11 @@ fn scan_pass(
 fn has_hit(f: &string_analysis::StringFinding) -> bool {
     f.has_actionable_match || f.decoded_layers.iter().any(|l| l.has_actionable_match)
 }
-fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
+fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     use std::io::Seek;
+    if args.live_jsonl {
+        args.jsonl = true;
+    }
     if !args.entropy_threshold.is_finite() || !(0.0..=8.0).contains(&args.entropy_threshold) {
         return Err("entropy threshold must be between 0 and 8".into());
     }
@@ -197,7 +203,8 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             "comparison file must be a path; stdin is supported only for the primary input".into(),
         );
     }
-    let want_strings = args.strings
+    let want_strings = args.live_jsonl
+        || args.strings
         || args.matches_only
         || args.encoding.is_some()
         || args.scan_utf16
@@ -209,7 +216,7 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     let report_requested = args.output.is_some() || args.jsonl;
     let report_stdout =
         args.output.as_deref() == Some("-") || (args.jsonl && args.output.is_none());
-    let human = !args.quiet && !report_stdout;
+    let human = !args.quiet && !report_stdout && !args.live_jsonl;
     let show_summary =
         args.summary || (!want_strings && !args.hex && !args.entropy && !report_requested);
     let want_summary = show_summary || report_requested || args.compare.is_some();
@@ -239,7 +246,13 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         + usize::from(args.scan_utf16)
         + usize::from(args.entropy)
         + usize::from(args.compare.is_some());
-    let mut snapshot = if passes > 1 {
+    let mut snapshot = if args.live_jsonl {
+        if args.hex || args.scan_utf16 || args.entropy || args.compare.is_some() {
+            Some(tempfile::tempfile()?)
+        } else {
+            None
+        }
+    } else if passes > 1 {
         let mut file = tempfile::tempfile()?;
         io::copy(&mut input, &mut file)?;
         file.rewind()?;
@@ -251,7 +264,7 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         Some(file) => file,
         None => input.as_mut(),
     };
-    let summary = if want_summary {
+    let mut summary = if want_summary && !args.live_jsonl {
         Some(file_summary::summarize_reader(&args.file, reader)?)
     } else {
         None
@@ -282,14 +295,18 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             Some(file) => Box::new(io::BufWriter::new(file.as_file_mut())),
             None => Box::new(io::BufWriter::new(io::stdout())),
         };
-        Some(json_output::JsonWriter::report(
-            writer,
-            summary.as_ref().unwrap(),
-            want_strings,
-            args.jsonl,
-            args.offset,
-            args.length,
-        )?)
+        Some(if args.live_jsonl {
+            json_output::JsonWriter::live(writer)?
+        } else {
+            json_output::JsonWriter::report(
+                writer,
+                summary.as_ref().unwrap(),
+                want_strings,
+                args.jsonl,
+                args.offset,
+                args.length,
+            )?
+        })
     } else {
         None
     };
@@ -329,13 +346,21 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             }
             Ok(())
         };
-        let reader: &mut dyn io::Read = if let Some(file) = snapshot.as_mut() {
-            file.rewind()?;
-            file
+        if args.live_jsonl {
+            let mut observed = file_summary::SummaryReader::new(input.as_mut(), snapshot.take());
+            scan_pass(&mut observed, &args, &patterns, false, &mut emit)?;
+            let (finished_summary, captured) = observed.finish(&args.file);
+            summary = Some(finished_summary);
+            snapshot = captured;
         } else {
-            input.as_mut()
-        };
-        scan_pass(reader, &args, &patterns, false, &mut emit)?;
+            let reader: &mut dyn io::Read = if let Some(file) = snapshot.as_mut() {
+                file.rewind()?;
+                file
+            } else {
+                input.as_mut()
+            };
+            scan_pass(reader, &args, &patterns, false, &mut emit)?;
+        }
         if args.scan_utf16 {
             let file = snapshot.as_mut().unwrap();
             file.rewind()?;
@@ -436,7 +461,10 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         writeln!(out, "Analysis coverage limited: {}", coverage.report())?;
     }
     out.flush()?;
-    if let Some(json) = json.take() {
+    if let Some(mut json) = json.take() {
+        if args.live_jsonl {
+            json.summary(summary.as_ref().unwrap(), args.offset, args.length)?;
+        }
         json.finish_report(&metadata, &coverage.report())?;
     }
     drop(json);
