@@ -76,8 +76,11 @@ fn locate_matches(
     for (name, regex) in patterns {
         let mut category_added = false;
         for matched in regex.find_iter(value) {
+            let end =
+                crate::validation::match_end(name, regex, value, matched.start(), matched.end());
+            let matched_text = &value[matched.start()..end];
             let Some(validation) =
-                crate::validation::validate(name, regex, value, matched.start(), matched.end())
+                crate::validation::validate(name, regex, value, matched.start(), end)
             else {
                 continue;
             };
@@ -87,17 +90,17 @@ fn locate_matches(
                 category_added = true;
             }
             if details.len() >= MAX_MATCH_DETAILS
-                || matched.len() > MAX_MATCH_TEXT_BYTES - text_bytes
+                || matched_text.len() > MAX_MATCH_TEXT_BYTES - text_bytes
             {
                 omitted = true;
                 continue;
             }
-            text_bytes += matched.len();
+            text_bytes += matched_text.len();
             details.push(MatchDetail {
                 pattern: name.clone(),
-                text: matched.as_str().into(),
+                text: matched_text.into(),
                 offset: absolute(matched.start()),
-                end_offset: absolute(matched.end()),
+                end_offset: absolute(end),
                 validation,
             });
         }
@@ -105,7 +108,7 @@ fn locate_matches(
     (categories, details, omitted, actionable)
 }
 
-#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Serialize, clap::ValueEnum)]
 pub enum Encoding {
     #[default]
     Auto,
@@ -176,6 +179,26 @@ pub fn load_patterns(
         .collect()
 }
 
+fn base64_shape(text: &str) -> bool {
+    let body = text.trim_end_matches('=');
+    !body.is_empty()
+        && text.len() % 4 == 0
+        && text.len() - body.len() <= 2
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+}
+fn decoded_size(text: &str) -> usize {
+    (text.len() / 4 * 3).saturating_sub(text.len() - text.trim_end_matches('=').len())
+}
+fn decode_text(text: &str) -> Option<String> {
+    STANDARD
+        .decode(text)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .filter(|s| !s.is_empty())
+}
+
 fn finish_run(
     run: &mut Run,
     offset: usize,
@@ -200,83 +223,93 @@ fn finish_run(
     } else {
         locate_matches(&value, offset, encoding, patterns)
     };
-    let (decoded, decode_status) = if !decode || limits.decode_depth == 0 {
-        (None, "disabled")
-    } else if truncated {
-        (None, "truncated")
-    } else if (value.len() / 4 * 3).saturating_sub(
-        value
-            .bytes()
-            .rev()
-            .take(2)
-            .take_while(|&b| b == b'=')
-            .count(),
-    ) > limits.max_decode_bytes
-    {
-        (None, "limit")
-    } else {
-        match STANDARD
-            .decode(&value)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-        {
-            Some(text) => (Some(text), "decoded"),
-            None => (None, "not_utf8_base64"),
-        }
-    };
+    let mut decoded = None;
     let mut decoded_layers = Vec::new();
-    if let Some(first) = decoded.as_ref() {
-        let mut text = first.clone();
-        let mut used = text.len();
-        let source_end_offset = offset
-            + if encoding.starts_with("UTF-16") {
-                value.encode_utf16().count() * 2
-            } else {
-                value.len()
+    let mut decode_status = if !decode || limits.decode_depth == 0 {
+        "disabled"
+    } else if truncated {
+        "truncated"
+    } else {
+        "not_utf8_base64"
+    };
+    if decode && limits.decode_depth > 0 && !truncated {
+        // Token matching does not cross punctuation or padding. One shared byte
+        // budget and a candidate cap bound all chains in an extracted run.
+        static TOKENS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let tokens = TOKENS.get_or_init(|| Regex::new(r"[A-Za-z0-9+/]+={0,2}").unwrap());
+        let candidates: Vec<_> = if base64_shape(&value) {
+            vec![(0, value.len())]
+        } else {
+            tokens
+                .find_iter(&value)
+                .filter(|m| m.len() >= 8 && base64_shape(m.as_str()))
+                .take(129)
+                .map(|m| (m.start(), m.end()))
+                .collect()
+        };
+        if candidates.len() > 128 {
+            decode_status = "limit";
+        }
+        let mut used = 0usize;
+        for (start, end) in candidates.into_iter().take(128) {
+            let candidate = &value[start..end];
+            if decoded_size(candidate) > limits.max_decode_bytes.saturating_sub(used) {
+                decode_status = "limit";
+                continue;
+            }
+            let Some(mut text) = decode_text(candidate) else {
+                continue;
             };
-        for depth in 1..=limits.decode_depth.min(8) {
-            let (categories, details, omitted, actionable) =
-                locate_matches(&text, 0, "UTF-8", patterns);
-            let estimated = (text.len() / 4 * 3).saturating_sub(
-                text.bytes()
-                    .rev()
-                    .take(2)
-                    .take_while(|&b| b == b'=')
-                    .count(),
-            );
-            let (next, state) = if depth == limits.decode_depth.min(8) {
-                (None, "depth_limit")
-            } else if estimated > limits.max_decode_bytes.saturating_sub(used) {
-                (None, "byte_limit")
-            } else {
-                match STANDARD
-                    .decode(&text)
-                    .ok()
-                    .and_then(|b| String::from_utf8(b).ok())
-                {
-                    Some(next) if !next.is_empty() => (Some(next), "decoded"),
-                    _ => (None, "not_utf8_base64"),
-                }
+            used += text.len();
+            if decoded.is_none() {
+                decoded = Some(text.clone());
+            }
+            if decode_status != "limit" {
+                decode_status = "decoded";
+            }
+            let raw_position = |index: usize| {
+                offset
+                    + if encoding.starts_with("UTF-16") {
+                        value[..index].encode_utf16().count() * 2
+                    } else {
+                        index
+                    }
             };
-            decoded_layers.push(DecodedLayer {
-                depth,
-                encoding: "base64",
-                source_offset: offset,
-                source_end_offset,
-                offset_space: "decoded_layer_utf8",
-                text,
-                matches: categories,
-                has_actionable_match: actionable,
-                match_details: details,
-                match_details_truncated: omitted,
-                next_decode: state,
-            });
-            match next {
-                Some(next) => {
-                    used += next.len();
-                    text = next;
+            for depth in 1..=limits.decode_depth.min(8) {
+                let (categories, details, omitted, actionable) =
+                    locate_matches(&text, 0, "UTF-8", patterns);
+                let (next, state) = if !base64_shape(&text) {
+                    (None, "not_utf8_base64")
+                } else if depth == limits.decode_depth.min(8) {
+                    (None, "depth_limit")
+                } else if decoded_size(&text) > limits.max_decode_bytes.saturating_sub(used) {
+                    (None, "byte_limit")
+                } else {
+                    match decode_text(&text) {
+                        Some(next) => (Some(next), "decoded"),
+                        None => (None, "not_utf8_base64"),
+                    }
+                };
+                decoded_layers.push(DecodedLayer {
+                    depth,
+                    encoding: "base64",
+                    source_offset: raw_position(start),
+                    source_end_offset: raw_position(end),
+                    offset_space: "decoded_layer_utf8",
+                    text,
+                    matches: categories,
+                    has_actionable_match: actionable,
+                    match_details: details,
+                    match_details_truncated: omitted,
+                    next_decode: state,
+                });
+                match next {
+                    Some(next) => {
+                        used += next.len();
+                        text = next;
+                    }
+                    None => break,
                 }
-                None => break,
             }
         }
     }
@@ -285,6 +318,11 @@ fn finish_run(
         && matches.is_empty()
         && decoded_layers.iter().all(|l| l.matches.is_empty())
         && !truncated
+        && decode_status != "limit"
+        && !match_details_truncated
+        && !decoded_layers.iter().any(|l| {
+            l.match_details_truncated || matches!(l.next_decode, "byte_limit" | "depth_limit")
+        })
     {
         return None;
     }
@@ -933,7 +971,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(found.len(), 1);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[1].value, "done");
+        assert_eq!(found[1].decode_status, "limit");
         assert_eq!(found[0].value, "aaaa");
         assert_eq!(found[0].length, 10);
         assert!(found[0].truncated);

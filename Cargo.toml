@@ -1,6 +1,6 @@
 [package]
 name = "binsith"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -14,3 +14,7 @@ infer = "0.7"
 base64 = "0.21"
 clap = { version = "4.2", features = ["derive"] }
 tempfile = "3"
+url = "2.5"
+
+[build-dependencies]
+sha2 = "0.10"

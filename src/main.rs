@@ -1,4 +1,5 @@
 mod comparison;
+mod coverage;
 mod entropy;
 mod file_summary;
 mod hex_dump;
@@ -10,10 +11,11 @@ mod validation;
 use clap::Parser;
 use std::io::{self, Write};
 
-#[derive(Parser)]
+#[derive(Parser, serde::Serialize)]
 #[command(
     name = "binsith",
     version,
+    long_version = concat!(env!("CARGO_PKG_VERSION"), "\nrevision: ", env!("BINSITH_REVISION"), "\nsource SHA256: ", env!("BINSITH_SOURCE_SHA256"), "\ntarget: ", env!("BINSITH_TARGET"), "\nprofile: ", env!("BINSITH_PROFILE")),
     about = "VULNEX BinSith, a binary analysis tool"
 )]
 struct Args {
@@ -88,6 +90,9 @@ struct Args {
     /// Exit code when no candidate/validated indicator is found
     #[arg(long, default_value_t = 0)]
     no_match_exit_code: u8,
+    /// Exit code for a limited scan with no indicator (match takes precedence)
+    #[arg(long)]
+    inconclusive_exit_code: Option<u8>,
     /// Compare strings, indicators, hashes, and regional entropy with another file
     #[arg(long, value_name = "OTHER_FILE")]
     compare: Option<String>,
@@ -199,7 +204,8 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         || !args.categories.is_empty()
         || args.compare.is_some()
         || args.match_exit_code != 0
-        || args.no_match_exit_code != 0;
+        || args.no_match_exit_code != 0
+        || args.inconclusive_exit_code.is_some();
     let report_requested = args.output.is_some() || args.jsonl;
     let report_stdout =
         args.output.as_deref() == Some("-") || (args.jsonl && args.output.is_none());
@@ -287,6 +293,22 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     } else {
         None
     };
+    use sha2::{Digest, Sha256};
+    let effective_patterns: Vec<_> = patterns
+        .iter()
+        .map(|(name, regex)| (name, regex.as_str()))
+        .collect();
+    let metadata = serde_json::json!({
+        "tool": "binsith", "version": env!("CARGO_PKG_VERSION"),
+        "revision": env!("BINSITH_REVISION"), "source_sha256": env!("BINSITH_SOURCE_SHA256"),
+        "target":env!("BINSITH_TARGET"), "profile":env!("BINSITH_PROFILE"), "rustc":env!("BINSITH_RUSTC"),
+        "configuration": &args, "strings_enabled":want_strings,
+        "effective_encoding":args.encoding.unwrap_or_default(),
+        "decoding_enabled":want_strings && !args.no_decode && args.max_decode_bytes > 0 && args.decode_depth > 0,
+        "patterns_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(&effective_patterns)?)),
+        "patterns_hash_format":"SHA256 of compact JSON array of sorted [name, expression] pairs after category filtering"
+    });
+    let mut coverage = coverage::Coverage::default();
     let mut matched = false;
     let mut index = comparison::Index::default();
     if want_strings {
@@ -294,6 +316,7 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             writeln!(out, "Offset\tEncoding\tLength\tAnalysis\tString")?;
         }
         let mut emit = |finding: string_analysis::StringFinding| {
+            coverage.observe(&finding);
             matched |= has_hit(&finding);
             if args.compare.is_some() {
                 index.add(&finding);
@@ -370,12 +393,14 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         let mut other_index = comparison::Index::default();
         other_file.rewind()?;
         scan_pass(&mut other_file, &args, &patterns, false, |f| {
+            coverage.observe(&f);
             other_index.add(&f);
             Ok(())
         })?;
         if args.scan_utf16 {
             other_file.rewind()?;
             scan_pass(&mut other_file, &args, &patterns, true, |f| {
+                coverage.observe(&f);
                 other_index.add(&f);
                 Ok(())
             })?;
@@ -394,6 +419,8 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             args.entropy_window,
             args.entropy_threshold,
         )?;
+        coverage.comparison_limited =
+            comparison.incomplete_index || comparison.entropy_changes_omitted > 0;
         if human {
             writeln!(
                 out,
@@ -405,9 +432,12 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             json.comparison(&comparison)?;
         }
     }
+    if human && coverage.limited() {
+        writeln!(out, "Analysis coverage limited: {}", coverage.report())?;
+    }
     out.flush()?;
     if let Some(json) = json.take() {
-        json.finish()?;
+        json.finish_report(&metadata, &coverage.report())?;
     }
     drop(json);
     if let (Some(file), Some(path)) = (json_file, args.output.as_ref()) {
@@ -417,7 +447,12 @@ fn run(args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     Ok(if matched {
         args.match_exit_code
     } else {
-        args.no_match_exit_code
+        if coverage.limited() {
+            args.inconclusive_exit_code
+                .unwrap_or(args.no_match_exit_code)
+        } else {
+            args.no_match_exit_code
+        }
     })
 }
 
