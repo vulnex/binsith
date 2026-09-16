@@ -580,6 +580,13 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
     for detail in &f.match_details {
         writeln!(
             out,
+            "    Context: {} | {} | {}",
+            utils::escape_string(&detail.evidence.before),
+            utils::escape_string(&detail.text),
+            utils::escape_string(&detail.evidence.after)
+        )?;
+        writeln!(
+            out,
             "  Match {} [{:08x}..{:08x}): {}",
             utils::escape_string(&detail.pattern),
             detail.offset,
@@ -595,7 +602,8 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
     if f.match_details_truncated {
         writeln!(
             out,
-            "  Additional match details omitted: per-string result limit"
+            "  Additional match details omitted by category: {}",
+            serde_json::to_string(&f.match_details_omitted)?
         )?;
     }
     if f.decode_status == "limit" {
@@ -613,6 +621,13 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
         for detail in &layer.match_details {
             writeln!(
                 out,
+                "    Context: {} | {} | {}",
+                utils::escape_string(&detail.evidence.before),
+                utils::escape_string(&detail.text),
+                utils::escape_string(&detail.evidence.after)
+            )?;
+            writeln!(
+                out,
                 "  Decoded match {} [UTF-8 {}..{}): {} ({:?}: {})",
                 utils::escape_string(&detail.pattern),
                 detail.offset,
@@ -620,6 +635,13 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
                 utils::escape_string(&detail.text),
                 detail.validation.status,
                 detail.validation.reason
+            )?;
+        }
+        if layer.match_details_truncated {
+            writeln!(
+                out,
+                "  Decoded match details omitted by category: {}",
+                serde_json::to_string(&layer.match_details_omitted)?
             )?;
         }
     }

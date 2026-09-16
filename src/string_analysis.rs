@@ -13,6 +13,7 @@ pub struct StringFinding {
     pub has_actionable_match: bool,
     pub match_details: Vec<MatchDetail>,
     pub match_details_truncated: bool,
+    pub match_details_omitted: std::collections::BTreeMap<String, usize>,
     pub decoded: Option<String>,
     pub decoded_layers: Vec<DecodedLayer>,
     pub truncated: bool,
@@ -31,6 +32,7 @@ pub struct DecodedLayer {
     pub has_actionable_match: bool,
     pub match_details: Vec<MatchDetail>,
     pub match_details_truncated: bool,
+    pub match_details_omitted: std::collections::BTreeMap<String, usize>,
     pub next_decode: &'static str,
 }
 
@@ -42,6 +44,7 @@ pub struct MatchDetail {
     /// Exclusive byte offset in the original input.
     pub end_offset: usize,
     pub validation: crate::validation::Validation,
+    pub evidence: crate::validation::Evidence,
 }
 
 // Bound repeated/overlapping custom-pattern results as well as string storage.
@@ -53,7 +56,13 @@ fn locate_matches(
     offset: usize,
     encoding: &str,
     patterns: &[(String, Regex)],
-) -> (Vec<String>, Vec<MatchDetail>, bool, bool) {
+) -> (
+    Vec<String>,
+    Vec<MatchDetail>,
+    bool,
+    bool,
+    std::collections::BTreeMap<String, usize>,
+) {
     // Regex offsets refer to UTF-8 text; UTF-16 requires original-byte boundaries.
     let boundaries = if encoding.starts_with("UTF-16") {
         let mut map = vec![0; value.len() + 1];
@@ -72,40 +81,75 @@ fn locate_matches(
     let mut details = Vec::new();
     let mut text_bytes = 0;
     let mut omitted = false;
+    let mut omitted_counts = std::collections::BTreeMap::new();
     let mut actionable = false;
-    for (name, regex) in patterns {
-        let mut category_added = false;
-        for matched in regex.find_iter(value) {
-            let end =
-                crate::validation::match_end(name, regex, value, matched.start(), matched.end());
-            let matched_text = &value[matched.start()..end];
-            let Some(validation) =
-                crate::validation::validate(name, regex, value, matched.start(), end)
-            else {
-                continue;
-            };
-            actionable |= validation.status != crate::validation::Status::Invalid;
-            if !category_added {
-                categories.push(name.clone());
-                category_added = true;
-            }
-            if details.len() >= MAX_MATCH_DETAILS
-                || matched_text.len() > MAX_MATCH_TEXT_BYTES - text_bytes
-            {
-                omitted = true;
+    // Round-robin valid matches: a noisy category cannot consume the entire
+    // budget before another category is considered. Iterators retain no matches.
+    let mut iterators: Vec<_> = patterns.iter().map(|(_, r)| r.find_iter(value)).collect();
+    let mut seen = vec![false; patterns.len()];
+    // Fused iterators may still repeat expensive failed searches after None.
+    // Never poll an exhausted regex again during another category's rounds.
+    let mut exhausted = vec![false; patterns.len()];
+    loop {
+        let mut progressed = false;
+        for (index, (name, regex)) in patterns.iter().enumerate() {
+            if exhausted[index] {
                 continue;
             }
-            text_bytes += matched_text.len();
-            details.push(MatchDetail {
-                pattern: name.clone(),
-                text: matched_text.into(),
-                offset: absolute(matched.start()),
-                end_offset: absolute(end),
-                validation,
-            });
+            let mut yielded = false;
+            for matched in iterators[index].by_ref() {
+                let end = crate::validation::match_end(
+                    name,
+                    regex,
+                    value,
+                    matched.start(),
+                    matched.end(),
+                );
+                let matched_text = &value[matched.start()..end];
+                let Some(validation) =
+                    crate::validation::validate(name, regex, value, matched.start(), end)
+                else {
+                    continue;
+                };
+                yielded = true;
+                progressed = true;
+                actionable |= validation.status != crate::validation::Status::Invalid;
+                if !seen[index] {
+                    categories.push(name.clone());
+                    seen[index] = true;
+                }
+                if details.len() >= MAX_MATCH_DETAILS
+                    || matched_text.len() > MAX_MATCH_TEXT_BYTES - text_bytes
+                {
+                    omitted = true;
+                    *omitted_counts.entry(name.clone()).or_insert(0) += 1;
+                    break;
+                }
+                text_bytes += matched_text.len();
+                details.push(MatchDetail {
+                    pattern: name.clone(),
+                    text: matched_text.into(),
+                    offset: absolute(matched.start()),
+                    end_offset: absolute(end),
+                    validation,
+                    evidence: crate::validation::evidence(name, regex, value, matched.start(), end),
+                });
+                break;
+            }
+            exhausted[index] = !yielded;
+        }
+        if !progressed {
+            break;
         }
     }
-    (categories, details, omitted, actionable)
+    let order: std::collections::BTreeMap<_, _> = patterns
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.as_str(), i))
+        .collect();
+    categories.sort_by_key(|name| order[name.as_str()]);
+    details.sort_by_key(|detail| (order[detail.pattern.as_str()], detail.offset));
+    (categories, details, omitted, actionable, omitted_counts)
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, clap::ValueEnum)]
@@ -182,7 +226,7 @@ pub fn load_patterns(
 fn base64_shape(text: &str) -> bool {
     let body = text.trim_end_matches('=');
     !body.is_empty()
-        && text.len() % 4 == 0
+        && text.len().is_multiple_of(4)
         && text.len() - body.len() <= 2
         && body
             .bytes()
@@ -218,8 +262,14 @@ fn finish_run(
         return None;
     }
     // Do not run regexes against a prefix: anchors could produce false matches.
-    let (matches, match_details, match_details_truncated, has_actionable_match) = if truncated {
-        (Vec::new(), Vec::new(), false, false)
+    let (
+        matches,
+        match_details,
+        match_details_truncated,
+        has_actionable_match,
+        match_details_omitted,
+    ) = if truncated {
+        (Vec::new(), Vec::new(), false, false, Default::default())
     } else {
         locate_matches(&value, offset, encoding, patterns)
     };
@@ -276,7 +326,7 @@ fn finish_run(
                     }
             };
             for depth in 1..=limits.decode_depth.min(8) {
-                let (categories, details, omitted, actionable) =
+                let (categories, details, omitted, actionable, omitted_counts) =
                     locate_matches(&text, 0, "UTF-8", patterns);
                 let (next, state) = if !base64_shape(&text) {
                     (None, "not_utf8_base64")
@@ -301,6 +351,7 @@ fn finish_run(
                     has_actionable_match: actionable,
                     match_details: details,
                     match_details_truncated: omitted,
+                    match_details_omitted: omitted_counts,
                     next_decode: state,
                 });
                 match next {
@@ -340,6 +391,7 @@ fn finish_run(
         has_actionable_match,
         match_details,
         match_details_truncated,
+        match_details_omitted,
         decoded,
         decoded_layers,
         truncated,
@@ -462,16 +514,14 @@ pub fn analyze_reader_with_encoding(
         }
         flush(&mut run, start, encoding)?;
     } else {
-        let mut offset = 0;
         let mut sequence = Vec::with_capacity(4);
         let mut sequence_start = 0;
-        while let Some(byte) = bytes.next() {
+        for (offset, byte) in bytes.enumerate() {
             let byte = byte?;
             if sequence.is_empty() {
                 sequence_start = offset;
             }
             sequence.push(byte);
-            offset += 1;
             loop {
                 match std::str::from_utf8(&sequence) {
                     Ok(text) => {
@@ -632,6 +682,7 @@ mod tests {
     }
     #[test]
     fn explicit_bomless_utf16_preserves_unicode_and_offsets() {
+        let patterns = vec![("word".into(), Regex::new("café").unwrap())];
         for (little, selected) in [(true, Encoding::Utf16le), (false, Encoding::Utf16be)] {
             let mut bytes = Vec::new();
             for unit in "abc😀 café\0tail".encode_utf16() {
@@ -641,7 +692,6 @@ mod tests {
                     unit.to_be_bytes()
                 });
             }
-            let patterns = vec![("word".into(), Regex::new("café").unwrap())];
             let mut found = Vec::new();
             analyze_reader_with_encoding(
                 Short {
@@ -903,7 +953,7 @@ mod tests {
             ("first".into(), Regex::new("^a+$").unwrap()),
             ("second".into(), Regex::new("^a+$").unwrap()),
         ];
-        let (_, details, omitted, _) = locate_matches(&text, 0, "UTF-8", &patterns);
+        let (_, details, omitted, _, _) = locate_matches(&text, 0, "UTF-8", &patterns);
         assert_eq!(details.len(), 1);
         assert!(omitted);
     }
@@ -1207,3 +1257,34 @@ mod tests {
 #[cfg(test)]
 #[path = "robustness_tests.rs"]
 mod robustness_tests;
+
+#[cfg(test)]
+mod fairness_tests {
+    use super::*;
+    #[test]
+    fn noisy_category_does_not_starve_later_evidence_and_omissions_are_exact() {
+        let text = format!("{} 192.0.2.1", "a".repeat(2000));
+        let patterns = vec![
+            ("file_path".into(), Regex::new("a").unwrap()),
+            ("ip_address".into(), Regex::new("192\\.0\\.2\\.1").unwrap()),
+        ];
+        let (_, details, omitted, _, counts) = locate_matches(&text, 0, "UTF-8", &patterns);
+        assert_eq!(details.len(), 1000);
+        assert!(details.iter().any(|d| d.text == "192.0.2.1"));
+        assert!(omitted);
+        assert_eq!(counts["file_path"], 1001);
+        assert!(!counts.contains_key("ip_address"));
+    }
+    #[test]
+    fn ambiguous_url_keeps_original_bytes_and_context() {
+        let patterns = load_patterns(None).unwrap();
+        let text = "before https://example.com/cert.crt0E after";
+        let (_, details, _, _, _) = locate_matches(text, 0, "UTF-8", &patterns);
+        let d = details.iter().find(|d| d.pattern == "URL").unwrap();
+        assert_eq!(d.text, "https://example.com/cert.crt0E");
+        assert_eq!(&text[d.offset..d.end_offset], d.text);
+        assert_eq!(d.evidence.before, "before ");
+        assert_eq!(d.evidence.after, " after");
+        assert!(d.evidence.boundary_warning.is_some());
+    }
+}

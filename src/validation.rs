@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::OnceLock};
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -14,6 +15,102 @@ pub enum Status {
 pub struct Validation {
     pub status: Status,
     pub reason: &'static str,
+}
+
+/// Bounded neighboring text in the same extracted/decoded run. Raw values and
+/// offsets remain unchanged; warnings are interpretations, never corrections.
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+pub struct Evidence {
+    pub before: String,
+    pub after: String,
+    pub boundary_warning: Option<&'static str>,
+}
+
+fn is_builtin(name: &str, regex: &Regex) -> bool {
+    static PATTERNS: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    PATTERNS
+        .get_or_init(|| toml::from_str(include_str!("regex_patterns.toml")).unwrap())
+        .get(name)
+        .map(String::as_str)
+        == Some(regex.as_str())
+}
+
+fn url_warning(text: &str) -> Option<&'static str> {
+    static NESTED: OnceLock<Regex> = OnceLock::new();
+    static TRAILER: OnceLock<Regex> = OnceLock::new();
+    if NESTED
+        .get_or_init(|| Regex::new(r"(?i)https?://").unwrap())
+        .find_iter(text)
+        .nth(1)
+        .is_some()
+    {
+        Some("Multiple URL schemes in one match; boundary is ambiguous")
+    } else if TRAILER
+        .get_or_init(|| Regex::new(r"(?i)(?:\.(?:crt|crl|cer|p7c)0|/ocsp0)[^/]*$").unwrap())
+        .is_match(text)
+    {
+        Some("Possible printable ASN.1 trailer after certificate URI; inspect source bytes")
+    } else if url::Url::parse(text).ok().is_some_and(|url| {
+        // A numeric suffix on an alphabetic TLD often comes from an adjacent
+        // binary field. IPv4/IPv6 and IDNA A-labels do not use this heuristic.
+        matches!(url.host(), Some(url::Host::Domain(host)) if host.trim_end_matches('.').rsplit('.').next().is_some_and(|label| !label.starts_with("xn--") && label.starts_with(|c: char| c.is_ascii_alphabetic()) && label.bytes().any(|b| b.is_ascii_digit())))
+    }) {
+        Some("Numeric suffix in alphabetic hostname final label; possible adjacent binary data")
+    } else {
+        None
+    }
+}
+
+pub fn evidence(name: &str, regex: &Regex, value: &str, start: usize, end: usize) -> Evidence {
+    let before: String = value[..start]
+        .chars()
+        .rev()
+        .take(48)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    Evidence {
+        before,
+        after: value[end..].chars().take(48).collect(),
+        boundary_warning: if name == "URL" && is_builtin(name, regex) {
+            url_warning(&value[start..end])
+        } else {
+            None
+        },
+    }
+}
+
+// Small bounded Base58 decoder for legacy Base58Check address formats only.
+fn base58check(text: &str, payload_len: usize) -> bool {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    if text.len() > 64 {
+        return false;
+    }
+    let mut bytes = vec![0u8];
+    for c in text.bytes() {
+        let Some(mut carry) = ALPHABET.iter().position(|&b| b == c).map(|n| n as u32) else {
+            return false;
+        };
+        for byte in bytes.iter_mut().rev() {
+            carry += u32::from(*byte) * 58;
+            *byte = carry as u8;
+            carry >>= 8;
+        }
+        while carry > 0 {
+            bytes.insert(0, carry as u8);
+            carry >>= 8;
+        }
+    }
+    let leading = text.bytes().take_while(|&b| b == b'1').count();
+    let nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    let mut decoded = vec![0; leading];
+    decoded.extend_from_slice(&bytes[nonzero..]);
+    if decoded.len() != payload_len + 4 {
+        return false;
+    }
+    let checksum = Sha256::digest(Sha256::digest(&decoded[..payload_len]));
+    decoded[payload_len..] == checksum[..4]
 }
 
 /// None suppresses a generic API-key false positive. Custom rules stay candidates.
@@ -37,6 +134,39 @@ pub fn validate(
     }
     let text = &value[start..end];
     match name {
+        "litecoin" | "zcash" => {
+            if base58check(text, if name == "zcash" { 22 } else { 21 }) {
+                result(
+                    Status::Validated,
+                    "Base58Check length and checksum passed; ownership and activity unknown",
+                )
+            } else {
+                result(
+                    Status::Invalid,
+                    "Base58Check length, alphabet, or checksum failed",
+                )
+            }
+        }
+        "file_path" => {
+            // A slash inside a URL is not independent evidence of a local file.
+            let mut context_start = start.saturating_sub(192);
+            while !value.is_char_boundary(context_start) {
+                context_start += 1;
+            }
+            let context = &value[context_start..start];
+            let token_start = context.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+            let prefix = &context[token_start..];
+            if prefix.contains(":/") || prefix.ends_with(':') && text.starts_with("//") {
+                return result(
+                    Status::Invalid,
+                    "Path-shaped fragment inside a URL; not evidence of a local file",
+                );
+            }
+            result(
+                Status::Candidate,
+                "Path shape matched; local-file existence and provenance not checked",
+            )
+        }
         "credit_card" => {
             let digits: Vec<_> = text
                 .bytes()
@@ -55,7 +185,7 @@ pub fn validate(
                     u32::from(if n > 9 { n - 9 } else { n })
                 })
                 .sum();
-            if sum % 10 == 0 {
+            if sum.is_multiple_of(10) {
                 result(
                     Status::Validated,
                     "13–19 digits and Luhn checksum passed; issuance and account status unknown",
@@ -80,6 +210,26 @@ pub fn validate(
             }
             match parsed {
                 Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
+                    if let Some(reason) = url_warning(text) {
+                        return result(Status::Candidate, reason);
+                    }
+                    if let Some(url::Host::Domain(host)) = url.host() {
+                        if !host.contains('.')
+                            || host.trim_end_matches('.').split('.').any(|label| {
+                                label.is_empty()
+                                    || label.starts_with('-')
+                                    || label.ends_with('-')
+                                    || !label
+                                        .bytes()
+                                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                            })
+                        {
+                            return result(
+                                Status::Candidate,
+                                "Nonstandard or single-label hostname; inspect context before use",
+                            );
+                        }
+                    }
                     result(
                         Status::Validated,
                         "HTTP(S) URL syntax passed; destination and reachability not checked",
@@ -235,4 +385,99 @@ pub fn match_end(name: &str, regex: &Regex, value: &str, start: usize, end: usiz
         }
     }
     start + text.len()
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    fn check(name: &str, text: &str) -> Validation {
+        let p: BTreeMap<String, String> =
+            toml::from_str(include_str!("regex_patterns.toml")).unwrap();
+        let r = Regex::new(&p[name]).unwrap();
+        let m = r.find(text).unwrap();
+        validate(name, &r, text, m.start(), m.end()).unwrap()
+    }
+    #[test]
+    fn observed_wallet_false_positives_fail_checksums() {
+        assert_eq!(
+            check("litecoin", "MaxReceiveBufferPerConnection").status,
+            Status::Invalid
+        );
+        assert_eq!(
+            check("zcash", "t16int32int64uint8arraysliceGreekSHabc").status,
+            Status::Invalid
+        );
+    }
+    #[test]
+    fn base58check_known_vector_and_mutation() {
+        assert_eq!(
+            check("litecoin", "LKDxGDJq5fF4FohAB8zJH24mDDNHDNtqsE").status,
+            Status::Validated
+        );
+        assert_eq!(
+            check("zcash", "t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs").status,
+            Status::Validated
+        );
+        assert!(base58check("1BoatSLRHtKNngkdXEeobR76b53LETtpyT", 21));
+        assert!(!base58check("1BoatSLRHtKNngkdXEeobR76b53LETtpyU", 21));
+        assert!(!base58check("1BoatSLRHtKNngkdXEeobR76b53LETtpyT", 22));
+        assert!(!base58check("0000", 21));
+    }
+    #[test]
+    fn ambiguous_urls_are_not_validated_and_invalid_stays_invalid() {
+        for text in [
+            "https://example.com/a.crt0E",
+            "https://example.com/ahttps://example.org/",
+            "http://Descriptionrelatively",
+            "http://.css",
+            "http://ocsp.example.com0A",
+            "http://example.com/ocsp0f",
+            "http://example.com/root.p7c0#",
+        ] {
+            assert_eq!(check("URL", text).status, Status::Candidate, "{text}");
+        }
+        assert_eq!(
+            check("URL", "https://example.com/%zzhttps://example.org").status,
+            Status::Invalid
+        );
+        assert_eq!(
+            check("URL", "http://192.0.2.1/path").status,
+            Status::Validated
+        );
+        assert_eq!(
+            check("URL", "http://example.xn--p1ai/path").status,
+            Status::Validated
+        );
+        assert_eq!(
+            check("URL", "https://example.com/a.crt").status,
+            Status::Validated
+        );
+    }
+    #[test]
+    fn url_path_fragments_are_not_local_file_evidence() {
+        assert_eq!(
+            check("file_path", "http://31.77.227.121/bins/parm").status,
+            Status::Invalid
+        );
+        assert_eq!(
+            check("file_path", "/tmp/notes.txt").status,
+            Status::Candidate
+        );
+    }
+    #[test]
+    fn context_is_bounded_unicode_safe_and_custom_rules_uninterpreted() {
+        let value = format!("{}TOKEN{}", "😀".repeat(100), "é".repeat(100));
+        let r = Regex::new("TOKEN").unwrap();
+        let e = evidence("URL", &r, &value, 400, 405);
+        assert_eq!(e.before.chars().count(), 48);
+        assert_eq!(e.after.chars().count(), 48);
+        assert!(e.boundary_warning.is_none());
+        let r = Regex::new(".*").unwrap();
+        assert_eq!(
+            validate("litecoin", &r, "MaxReceiveBufferPerConnection", 0, 28)
+                .unwrap()
+                .status,
+            Status::Candidate
+        );
+    }
 }

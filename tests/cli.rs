@@ -1546,3 +1546,77 @@ fn export_filter_preserves_analysis_report_and_match_exit_policy() {
         "complete_within_configured_scope"
     );
 }
+
+#[test]
+fn release_candidate_export_keeps_v1_shape_and_validation_filters() {
+    let input = b"before https://example.com/root.p7c0# after\0MaxReceiveBufferPerConnection\0https://example.org/ok";
+    let output = run(
+        &[
+            "--export-indicators",
+            "-",
+            "--category",
+            "URL,litecoin",
+            "-",
+        ],
+        input,
+    );
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["context"]["schema_version"], 1);
+    assert!(report["context"]["upstream_omitted_details_by_category"].is_object());
+    let entries = report["indicators"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    let ambiguous = entries
+        .iter()
+        .find(|i| i["value"] == "https://example.com/root.p7c0#")
+        .unwrap();
+    for key in [
+        "category",
+        "value",
+        "validation_status",
+        "validation_reason",
+        "observed_occurrences",
+        "locations",
+        "locations_omitted",
+    ] {
+        assert!(ambiguous.get(key).is_some(), "missing legacy field {key}");
+    }
+    assert_eq!(ambiguous["validation_status"], "candidate");
+    let location = &ambiguous["locations"][0];
+    assert_eq!(location["source_offset"], 7);
+    assert_eq!(location["evidence"]["before"], "before ");
+    assert_eq!(location["evidence"]["after"], " after");
+    assert!(location["evidence"]["boundary_warning"].is_string());
+    for (filter, expected) in [("actionable", 2), ("validated", 1)] {
+        let output = run(
+            &[
+                "--export-indicators",
+                "-",
+                "--export-validation",
+                filter,
+                "--category",
+                "URL,litecoin",
+                "-",
+            ],
+            input,
+        );
+        assert!(output.status.success());
+        let filtered: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(filtered["indicators"].as_array().unwrap().len(), expected);
+    }
+    let output = run(
+        &[
+            "--export-indicators",
+            "-",
+            "--export-format",
+            "csv",
+            "--category",
+            "URL,litecoin",
+            "-",
+        ],
+        input,
+    );
+    assert!(output.status.success());
+    let csv = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(csv.lines().next().unwrap(), "\"record_type\",\"category\",\"value\",\"validation_status\",\"validation_reason\",\"observed_occurrences\",\"locations_json\",\"locations_omitted\",\"context_json\"");
+}

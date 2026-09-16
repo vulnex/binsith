@@ -1,7 +1,8 @@
 [package]
 name = "binsith"
-version = "0.4.1"
+version = "0.4.2-rc.1"
 edition = "2021"
+include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "build.rs", "README.md", "CHANGELOG.md", "RELEASE.md"]
 
 [dependencies]
 regex = "1.5"
