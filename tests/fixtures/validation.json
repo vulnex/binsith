@@ -1,0 +1,127 @@
+[
+  {
+    "pattern": "credit_card",
+    "input": "card=4111 1111 1111 1111",
+    "status": "validated"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=4111-1111-1111-1111",
+    "status": "validated"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=378282246310005",
+    "status": "validated"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=4222222222222",
+    "status": "validated"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=4111111111111112",
+    "status": "invalid"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=0000000000000000",
+    "status": "invalid"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=1111111111111111",
+    "status": "invalid"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=411111111111",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "credit_card",
+    "input": "card=41111111111111111111",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "ip_address",
+    "input": "host=192.168.1.1",
+    "status": "validated"
+  },
+  {
+    "pattern": "ip_address",
+    "input": "host=999.999.999.999",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "guid",
+    "input": "550e8400-e29b-41d4-a716-446655440000",
+    "status": "validated"
+  },
+  {
+    "pattern": "mac",
+    "input": "00:1A:2B:3C:4D:5E",
+    "status": "validated"
+  },
+  {
+    "pattern": "mac",
+    "input": "00-1A-2B-3C-4D-5E",
+    "status": "validated"
+  },
+  {
+    "pattern": "mac",
+    "input": "00:1A-2B:3C:4D:5E",
+    "status": "invalid"
+  },
+  {
+    "pattern": "api_key",
+    "input": "0123456789abcdef0123456789abcdef",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "api_key",
+    "input": "id=0123456789abcdef0123456789abcdef",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "api_key",
+    "input": "api_key=0123456789abcdef0123456789abcdef",
+    "status": "candidate"
+  },
+  {
+    "pattern": "api_key",
+    "input": "\"ACCESS_TOKEN\": \"0123456789abcdef0123456789abcdef\"",
+    "status": "candidate"
+  },
+  {
+    "pattern": "api_key",
+    "input": "secret = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+    "status": "candidate"
+  },
+  {
+    "pattern": "api_key",
+    "input": "monkey=0123456789abcdef0123456789abcdef",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "api_key",
+    "input": "api_key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "api_key",
+    "input": "api_key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "suppressed"
+  },
+  {
+    "pattern": "ethereum",
+    "input": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "candidate"
+  },
+  {
+    "pattern": "Email",
+    "input": "person@example.com",
+    "status": "candidate"
+  }
+]
