@@ -1203,3 +1203,7 @@ mod tests {
         assert!(analyze(b"aGVsbG8=", &[], false, false)[0].decoded.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "robustness_tests.rs"]
+mod robustness_tests;

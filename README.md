@@ -310,3 +310,51 @@ and the destination is replaced only after successful completion. Use stdout for
 immediate consumption. On failure or interruption, partial stdout events are not
 a completed report; always require the final `complete` event. Existing match and
 inconclusive exit policies apply unchanged.
+
+### Robustness and performance checks
+
+`cargo test --locked` includes deterministic mutation/property tests with a fixed
+seed: 256 cases across all four primary encoding selections and embedded UTF-16,
+using both one-byte reads and buffered reads. They check chunk-independent output,
+source-byte spans, decoded-text spans, retained-string/detail bounds, shared decode
+budgets, malformed Unicode, truncation, zero-width/overlapping patterns, nested
+Base64, and output-error propagation. The large-input checks include a 1 MiB run
+under a 64-byte retention cap and decode-depth/budget combinations.
+
+These are reproducible fuzz-style regression tests, not a coverage-guided fuzzing
+campaign or proof that all malformed inputs are safe. Existing CLI tests also cover
+range boundaries, failed reports, open-stdin streaming, and completion markers.
+
+For process-level mutation checks and performance measurements, use Python 3.9+
+with a release build (no third-party Python packages are needed):
+
+```sh
+cargo build --release --locked
+python3 tools/quality_checks.py --output target/quality-baseline.json
+python3 tools/quality_checks.py --baseline target/quality-baseline.json --output target/quality-current.json
+```
+
+The harness defaults to 128 deterministic CLI mutations, a 16 MiB generated corpus,
+five timed runs after an excluded warm-up, and a 30-second timeout per process.
+Use `--cases`, `--mib`, `--runs`, and `--timeout` to adjust those settings. Every
+successful mutated scan must report the exact selected-range SHA-256 and length;
+expected range/BOM errors must fail without a completion event.
+
+Benchmarks cover summary, string analysis, and live JSONL throughput, plus latency
+from writing a complete string to receiving its first finding with stdin still
+open. Full-run timings include process startup and discard stdout to avoid disk
+report costs. JSON results include samples, median wall time, MiB/s, executable
+build identity, harness fingerprint, workload settings, platform, and peak RSS. RSS is measured per child
+via `wait4` on macOS/Linux; it is `null` where unavailable. Retention assertions and
+RSS measurements do not impose a hard operating-system memory limit.
+
+An optional baseline comparison exits 1 when median time or peak RSS increases
+more than `--max-regression-percent` (default 25). Other successful runs exit 0;
+assertions, timeouts, and incompatible baselines fail. Comparisons require matching
+platform, architecture, harness fingerprint, and workload settings. Run on the same otherwise-idle
+machine: this check cannot detect different hardware with matching platform names,
+and scheduler load, thermal state, and filesystem cache can affect results.
+
+CI runs the Rust checks with a 15-minute job timeout. Linux additionally runs a
+small process-level stress/benchmark smoke check; timing comparisons are kept local
+to avoid treating noise from shared CI runners as performance regressions.
