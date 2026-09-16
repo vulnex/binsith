@@ -428,3 +428,32 @@ consuming stdout; a truncated CSV may otherwise look valid. Values are preserved
 exactly, including leading formula characters: import those columns as text when
 using spreadsheet software. Named exports replace their destination only after a
 successful write and flush.
+
+### Export filters and category discovery (0.4.1)
+
+```sh
+binsith --list-categories
+binsith --list-categories --patterns custom-patterns.toml
+binsith sample.bin --export-indicators actionable.json --export-validation actionable --quiet
+binsith sample.bin --export-indicators validated.csv --export-format csv --export-validation validated --quiet
+```
+
+`--list-categories` prints sorted category names, one per line, without a sample or
+stdin read. With `--patterns`, it lists that custom file instead of the bundled
+rules. Pattern files are compiled and validated before anything is printed. Listing
+is a standalone operation: scan/output options and a sample argument are rejected.
+Control characters in unusual custom names are escaped for terminal display.
+
+`--export-validation` accepts `all` (the default), `actionable` (candidate and
+validated matches), or `validated`. It requires `--export-indicators` and applies
+to both raw and decoded matches in JSON and CSV. Filtering occurs before index
+limits. Export context records `validation_filter` and `filtered_occurrences`,
+counting observed match details excluded by this selection. Intentional filtering
+does not mark coverage limited. Upstream analysis limits still apply and are
+reported independently.
+
+These filters affect only the indicator export. Normal analysis reports,
+comparisons, and match/no-match exit policies keep their existing behavior. A
+validated-only export can therefore be empty while a candidate match triggers the
+configured match exit code. Validated means the implemented syntax/checksum checks
+passed, not that an indicator is malicious, reachable, or authentic.

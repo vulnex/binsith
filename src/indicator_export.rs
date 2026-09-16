@@ -17,6 +17,24 @@ pub enum Format {
     Csv,
 }
 
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationFilter {
+    #[default]
+    All,
+    Actionable,
+    Validated,
+}
+impl ValidationFilter {
+    fn accepts(self, status: &Status) -> bool {
+        match self {
+            Self::All => true,
+            Self::Actionable => !matches!(status, Status::Invalid),
+            Self::Validated => matches!(status, Status::Validated),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 struct Location {
     source_offset: usize,
@@ -46,6 +64,8 @@ struct LimitsReached {
 pub struct Index {
     entries: BTreeMap<(String, String, &'static str), Indicator>,
     value_bytes: usize,
+    filter: ValidationFilter,
+    filtered_occurrences: u64,
     limits: LimitsReached,
 }
 impl Default for Index {
@@ -53,6 +73,8 @@ impl Default for Index {
         Self {
             entries: BTreeMap::new(),
             value_bytes: 0,
+            filter: ValidationFilter::All,
+            filtered_occurrences: 0,
             limits: LimitsReached::default(),
         }
     }
@@ -61,7 +83,17 @@ const MAX_INDICATORS: usize = 10000;
 const MAX_VALUE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOCATIONS: usize = 64;
 impl Index {
+    pub fn new(filter: ValidationFilter) -> Self {
+        Self {
+            filter,
+            ..Self::default()
+        }
+    }
     fn insert(&mut self, detail: &MatchDetail, location: Location) {
+        if !self.filter.accepts(&detail.validation.status) {
+            self.filtered_occurrences += 1;
+            return;
+        }
         let status = match detail.validation.status {
             Status::Candidate => "candidate",
             Status::Validated => "validated",
@@ -149,6 +181,7 @@ impl Index {
     ) -> io::Result<()> {
         let context = serde_json::json!({"schema_version":1, "kind":"indicator_export", "processing_complete":true,
             "file_summary":summary, "metadata":metadata, "analysis_coverage":coverage,
+            "validation_filter":self.filter, "filtered_occurrences":self.filtered_occurrences,
             "export_limited":self.limited(), "export_limits":self.limits,
             "max_indicators":MAX_INDICATORS,"max_value_bytes":MAX_VALUE_BYTES,"max_locations_per_indicator":MAX_LOCATIONS,
             "indicator_count":self.entries.len(), "scope":"primary_input_only",

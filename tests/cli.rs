@@ -1390,3 +1390,159 @@ fn csv_export_has_context_even_without_indicators() {
     assert!(csv.contains("\"context\""));
     assert!(csv.contains("\"\"processing_complete\"\":true"));
 }
+
+#[test]
+fn category_listing_needs_no_sample_and_supports_custom_patterns() {
+    let output = run(&["--list-categories"], b"");
+    assert!(output.status.success(), "{output:?}");
+    let patterns: std::collections::BTreeMap<String, String> =
+        toml::from_str(include_str!("../src/regex_patterns.toml")).unwrap();
+    let expected = patterns
+        .keys()
+        .map(|name| format!("{name}\n"))
+        .collect::<String>();
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+    let mut custom = tempfile::NamedTempFile::new().unwrap();
+    custom.write_all(b"zulu = 'z+'\nalpha = 'a+'\n").unwrap();
+    let output = run(
+        &[
+            "--list-categories",
+            "--patterns",
+            custom.path().to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"alpha\nzulu\n");
+    assert!(!run(&[], b"").status.success());
+}
+
+#[test]
+fn category_listing_rejects_scan_flags_and_invalid_pattern_files() {
+    for flags in [
+        vec!["--list-categories", "missing.bin"],
+        vec!["--list-categories", "--jsonl"],
+        vec!["--list-categories", "--offset", "0"],
+        vec!["--list-categories", "--export-indicators", "-"],
+    ] {
+        let output = run(&flags, b"");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+    let mut custom = tempfile::NamedTempFile::new().unwrap();
+    custom.write_all(b"invalid = '['").unwrap();
+    let output = run(
+        &[
+            "--list-categories",
+            "--patterns",
+            custom.path().to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn validation_export_filters_apply_to_raw_and_decoded_matches() {
+    use base64::Engine;
+    let text = "https://example.com user@example.org 4111111111111112";
+    let input = format!(
+        "{text}\0{}",
+        base64::engine::general_purpose::STANDARD.encode(text)
+    );
+    for (filter, count, filtered) in [("all", 3, 0), ("actionable", 2, 2), ("validated", 1, 4)] {
+        let output = run(
+            &[
+                "--export-indicators",
+                "-",
+                "--export-validation",
+                filter,
+                "--category",
+                "URL,Email,credit_card",
+                "-",
+            ],
+            input.as_bytes(),
+        );
+        assert!(output.status.success(), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["indicators"].as_array().unwrap().len(), count);
+        assert_eq!(report["context"]["validation_filter"], filter);
+        assert_eq!(report["context"]["filtered_occurrences"], filtered);
+        assert_eq!(report["context"]["export_limited"], false);
+        for entry in report["indicators"].as_array().unwrap() {
+            assert_eq!(entry["observed_occurrences"], 2);
+            assert_eq!(entry["locations"].as_array().unwrap().len(), 2);
+            if filter != "all" {
+                assert_ne!(entry["validation_status"], "invalid");
+            }
+            if filter == "validated" {
+                assert_eq!(entry["validation_status"], "validated");
+            }
+        }
+        let output = run(
+            &[
+                "--export-indicators",
+                "-",
+                "--export-format",
+                "csv",
+                "--export-validation",
+                filter,
+                "--category",
+                "URL,Email,credit_card",
+                "-",
+            ],
+            input.as_bytes(),
+        );
+        assert!(output.status.success());
+        let csv = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            csv.lines()
+                .filter(|line| line.starts_with("\"indicator\","))
+                .count(),
+            count
+        );
+    }
+    assert_eq!(
+        run(&["--export-validation", "validated", "-"], b"")
+            .status
+            .code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn export_filter_preserves_analysis_report_and_match_exit_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = dir.path().join("export.json");
+    let output = run(
+        &[
+            "--export-indicators",
+            export.to_str().unwrap(),
+            "--export-validation",
+            "validated",
+            "--category",
+            "Email",
+            "--match-exit-code",
+            "7",
+            "-j",
+            "-",
+            "-",
+        ],
+        b"person@example.org",
+    );
+    assert_eq!(output.status.code(), Some(7));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["strings"][0]["match_details"][0]["validation"]["status"],
+        "candidate"
+    );
+    let exported: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(export).unwrap()).unwrap();
+    assert_eq!(exported["indicators"], serde_json::json!([]));
+    assert_eq!(exported["context"]["filtered_occurrences"], 1);
+    assert_eq!(
+        exported["context"]["analysis_coverage"]["status"],
+        "complete_within_configured_scope"
+    );
+}
