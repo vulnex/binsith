@@ -370,3 +370,9 @@ it does not publish the temporary report over the destination.
 Normal EOF is a valid end of input, including when supplied by another program.
 BinSith cannot infer whether that upstream program failed before closing its pipe;
 consumers should check the upstream process status as well as report completion.
+
+For coverage-guided exploration with AddressSanitizer, the separate
+[fuzz workspace](fuzz/README.md) includes a bounded cargo-fuzz target and curated
+seeds. It checks chunk-independent findings, exact offsets, and resource caps
+while mutating encoding and decode settings. A separate Linux CI job runs a short
+sanitizer campaign. This complements deterministic mutation and I/O-failure tests.
