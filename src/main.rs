@@ -3,6 +3,7 @@ mod coverage;
 mod entropy;
 mod file_summary;
 mod hex_dump;
+mod indicator_export;
 mod json_output;
 mod string_analysis;
 mod utils;
@@ -84,6 +85,17 @@ struct Args {
     /// Live JSON Lines: enable strings, emit findings before EOF, summarize last
     #[arg(long)]
     live_jsonl: bool,
+    /// Export deduplicated primary-input indicators to PATH, or - for stdout
+    #[arg(long, value_name = "PATH")]
+    export_indicators: Option<String>,
+    /// Indicator export format
+    #[arg(
+        long,
+        value_enum,
+        default_value = "json",
+        requires = "export_indicators"
+    )]
+    export_format: indicator_export::Format,
     /// Suppress human-readable output
     #[arg(short, long)]
     quiet: bool,
@@ -203,7 +215,8 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             "comparison file must be a path; stdin is supported only for the primary input".into(),
         );
     }
-    let want_strings = args.live_jsonl
+    let want_strings = args.export_indicators.is_some()
+        || args.live_jsonl
         || args.strings
         || args.matches_only
         || args.encoding.is_some()
@@ -216,10 +229,28 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     let report_requested = args.output.is_some() || args.jsonl;
     let report_stdout =
         args.output.as_deref() == Some("-") || (args.jsonl && args.output.is_none());
-    let human = !args.quiet && !report_stdout && !args.live_jsonl;
+    let export_stdout = args.export_indicators.as_deref() == Some("-");
+    if export_stdout && report_stdout {
+        return Err("indicator export and analysis report cannot both use stdout".into());
+    }
+    if let (Some(export), Some(report)) = (&args.export_indicators, &args.output) {
+        if export != "-"
+            && report != "-"
+            && indicator_export::destination_identity(export)?
+                == indicator_export::destination_identity(report)?
+        {
+            return Err(
+                "indicator export and analysis report require different destinations".into(),
+            );
+        }
+    }
+    let human = !args.quiet && !report_stdout && !export_stdout && !args.live_jsonl;
     let show_summary =
         args.summary || (!want_strings && !args.hex && !args.entropy && !report_requested);
-    let want_summary = show_summary || report_requested || args.compare.is_some();
+    let want_summary = show_summary
+        || report_requested
+        || args.compare.is_some()
+        || args.export_indicators.is_some();
     let mut patterns = if want_strings {
         string_analysis::load_patterns(args.patterns.as_deref())?
     } else {
@@ -239,7 +270,10 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     } else {
         Box::new(io::sink())
     };
-    let mut out = utils::Terminal::new(io::BufWriter::new(terminal), report_requested);
+    let mut out = utils::Terminal::new(
+        io::BufWriter::new(terminal),
+        report_requested || args.export_indicators.is_some(),
+    );
     let passes = usize::from(want_summary)
         + usize::from(want_strings)
         + usize::from(args.hex)
@@ -328,12 +362,19 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     let mut coverage = coverage::Coverage::default();
     let mut matched = false;
     let mut index = comparison::Index::default();
+    let mut indicators = args
+        .export_indicators
+        .as_ref()
+        .map(|_| indicator_export::Index::default());
     if want_strings {
         if human {
             writeln!(out, "Offset\tEncoding\tLength\tAnalysis\tString")?;
         }
         let mut emit = |finding: string_analysis::StringFinding| {
             coverage.observe(&finding);
+            if let Some(index) = indicators.as_mut() {
+                index.observe(&finding);
+            }
             matched |= has_hit(&finding);
             if args.compare.is_some() {
                 index.add(&finding);
@@ -456,6 +497,17 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         if let Some(json) = json.as_mut() {
             json.comparison(&comparison)?;
         }
+    }
+    if let Some(index) = indicators.as_ref() {
+        coverage.indicator_export_limited = index.limited();
+        indicator_export::save(
+            index,
+            args.export_indicators.as_deref().unwrap(),
+            args.export_format,
+            summary.as_ref().unwrap(),
+            &metadata,
+            &coverage.report(),
+        )?;
     }
     if human && coverage.limited() {
         writeln!(out, "Analysis coverage limited: {}", coverage.report())?;

@@ -376,3 +376,55 @@ For coverage-guided exploration with AddressSanitizer, the separate
 seeds. It checks chunk-independent findings, exact offsets, and resource caps
 while mutating encoding and decode settings. A separate Linux CI job runs a short
 sanitizer campaign. This complements deterministic mutation and I/O-failure tests.
+
+### Indicator export (0.4.0)
+
+```sh
+binsith sample.bin --export-indicators indicators.json --quiet
+binsith sample.bin --export-indicators indicators.csv --export-format csv --quiet
+binsith sample.bin --category URL,ip_address --export-indicators -
+binsith --live-jsonl sample.bin --export-indicators indicators.json
+```
+
+`--export-indicators PATH` enables string analysis and writes a deduplicated export
+after analysis finishes. `-` selects stdout; the default format is JSON regardless
+of filename extension. Use `--export-format csv` for CSV. An export and the normal
+analysis report may be requested together with distinct destinations; they cannot
+both write to stdout. Named outputs are independently atomic, not a multi-file
+transaction. If the second output fails to publish, the first may already exist.
+
+Entries are sorted by category, exact value, and validation status. No URL, case,
+or Unicode normalization is applied. Candidate, validated, and invalid matches are
+all retained with their status and validation reason. Filter invalid entries when
+your downstream workflow requires only actionable candidates. Export includes the
+primary input only, even with `--compare`. Configured categories, extraction modes,
+minimum length, ranges, and decoding limits apply.
+
+Each entry carries `observed_occurrences` and a `locations` list. Raw locations have
+absolute source byte offsets and an exclusive end. Decoded locations describe the
+original encoded token's source envelope, `decode_encoding`, `decode_depth`, and
+UTF-8 offsets relative to that decoded layer. Source encoding and extraction method
+distinguish primary findings from embedded UTF-16 candidates. Repeated identical
+locations are stored once; occurrence counts reflect observed retained match details
+across all passes, including overlapping extraction interpretations. They do not
+count upstream matches omitted by analysis limits.
+
+JSON contains `context` and `indicators`. Context includes the selected-range file
+summary and hashes, configuration/build metadata, analysis coverage, and export
+limit counters. The index retains at most 10,000 unique indicators, 16 MiB of
+category/value bytes (excluding storage overhead and duplicated index keys), and
+64 locations per indicator. Beyond these limits, existing-entry occurrence counts
+continue, omitted observations are counted, and `export_limited` is true. Upstream
+truncation is reported separately through `analysis_coverage`. Export limits also
+participate in the configured inconclusive-exit policy; positive matches still take
+precedence. A limited export is not an exhaustive list of indicators.
+
+CSV uses quoted fields and CRLF record endings. Read it with a CSV parser because
+values can contain commas, quotes, or decoded newlines. Rows with
+`record_type=indicator` carry indicator data, with locations encoded in the
+`locations_json` cell. A final `record_type=context` row carries `context_json` and
+confirms completion, including for empty exports. Require that final row when
+consuming stdout; a truncated CSV may otherwise look valid. Values are preserved
+exactly, including leading formula characters: import those columns as text when
+using spreadsheet software. Named exports replace their destination only after a
+successful write and flush.
