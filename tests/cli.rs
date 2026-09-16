@@ -9,8 +9,15 @@ fn run(args: &[&str], input: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    child.wait_with_output().unwrap()
+    std::thread::scope(|scope| {
+        let mut stdin = child.stdin.take().unwrap();
+        let writer = scope.spawn(move || {
+            let _ = stdin.write_all(input);
+        });
+        let output = child.wait_with_output().unwrap();
+        writer.join().unwrap();
+        output
+    })
 }
 
 #[test]
@@ -577,4 +584,288 @@ fn match_exit_code_does_not_depend_on_detail_cap() {
         b"",
     );
     assert_eq!(output.status.code(), Some(7));
+}
+
+fn report(args: &[&str], input: &[u8]) -> (Output, serde_json::Value) {
+    let mut flags = vec!["-s", "-j", "-", "-"];
+    flags.extend_from_slice(args);
+    let output = run(&flags, input);
+    let json = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{e}: {output:?}"));
+    (output, json)
+}
+
+#[test]
+fn full_urls_preserve_evidence_and_validate_syntax() {
+    for url in [
+        "https://example.com:8443/a?x=1&y=2#part",
+        "HTTPS://example.com/a%20b",
+        "http://[2001:db8::1]:8080/a",
+        "https://example.com/a_(b)",
+    ] {
+        let input = format!("url=\"{url}\"");
+        let (_, json) = report(&["--category", "URL"], input.as_bytes());
+        let d = &json["strings"][0]["match_details"][0];
+        assert_eq!(d["text"], url);
+        assert_eq!(d["offset"], 5);
+        assert_eq!(d["end_offset"], 5 + url.len());
+        assert_eq!(d["validation"]["status"], "validated");
+    }
+    let (_, json) = report(&["--category", "URL"], b"(https://example.com/path).");
+    assert_eq!(
+        json["strings"][0]["match_details"][0]["text"],
+        "https://example.com/path"
+    );
+    for url in ["http://example.com:99999/a", "https://example.com/%ZZ"] {
+        let (output, json) = report(
+            &["--category", "URL", "--match-exit-code", "7"],
+            url.as_bytes(),
+        );
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(
+            json["strings"][0]["match_details"][0]["validation"]["status"],
+            "invalid"
+        );
+    }
+}
+
+#[test]
+fn windows_paths_and_ipv4_boundaries() {
+    for path in [
+        r"C:\Windows\System32\cmd.exe",
+        r"C:\Program Files\Example\app.exe",
+        "/usr/local/bin/tool.sh",
+    ] {
+        let (_, json) = report(&["--category", "file_path"], path.as_bytes());
+        assert_eq!(json["strings"][0]["match_details"][0]["text"], path);
+    }
+    for malformed in [
+        "999.192.168.1.1.999",
+        "1.192.168.1.1",
+        "192.168.1.1.example",
+        "abc192.168.1.1",
+    ] {
+        let (_, json) = report(
+            &["--category", "ip_address", "--no-decode"],
+            malformed.as_bytes(),
+        );
+        assert!(
+            json["strings"].as_array().unwrap().is_empty(),
+            "{malformed}"
+        );
+    }
+    let (_, json) = report(&["--category", "ip_address"], b"server=192.168.1.1:8080");
+    assert_eq!(
+        json["strings"][0]["match_details"][0]["text"],
+        "192.168.1.1"
+    );
+}
+
+#[test]
+fn base64_tokens_have_exact_source_envelopes() {
+    use base64::Engine;
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode("https://example.com:8443/a?x=1&y=2#part");
+    let text = format!("config={encoded}; other=\"{encoded}\"");
+    for utf16 in [false, true] {
+        let input = if utf16 {
+            text.encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>()
+        } else {
+            text.as_bytes().to_vec()
+        };
+        let mut flags = vec!["--category", "URL", "--offset", "2"];
+        if utf16 {
+            flags.extend(["--encoding", "utf16le"]);
+        }
+        let mut bytes = vec![0, 0];
+        bytes.extend(input);
+        let (_, json) = report(&flags, &bytes);
+        let layers = json["strings"][0]["decoded_layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 2);
+        let scale = if utf16 { 2 } else { 1 };
+        for (i, start) in [7, 7 + encoded.len() + 9].into_iter().enumerate() {
+            assert_eq!(layers[i]["source_offset"], 2 + start * scale);
+            assert_eq!(
+                layers[i]["source_end_offset"],
+                2 + (start + encoded.len()) * scale
+            );
+            assert_eq!(layers[i]["match_details"][0]["offset"], 0);
+            assert_eq!(layers[i]["next_decode"], "not_utf8_base64");
+        }
+    }
+}
+
+#[test]
+fn coverage_exit_precedence_and_metadata() {
+    let flags = [
+        "--category",
+        "URL",
+        "--max-string-bytes",
+        "24",
+        "--match-exit-code",
+        "7",
+        "--no-match-exit-code",
+        "8",
+        "--inconclusive-exit-code",
+        "9",
+    ];
+    let (output, json) = report(&flags, b"https://example.com/this-is-longer-than-the-limit");
+    assert_eq!(output.status.code(), Some(9));
+    assert_eq!(json["processing_complete"], true);
+    assert_eq!(json["analysis_coverage"]["status"], "limited");
+    assert_eq!(
+        json["analysis_coverage"]["limitations"]["truncated_strings"],
+        1
+    );
+    assert_eq!(json["metadata"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        json["metadata"]["configuration"]["inconclusive_exit_code"],
+        9
+    );
+    assert_eq!(
+        json["metadata"]["source_sha256"].as_str().unwrap().len(),
+        64
+    );
+    let (output, _) = report(
+        &flags,
+        b"https://example.com\0https://example.com/this-is-longer-than-the-limit",
+    );
+    assert_eq!(output.status.code(), Some(7));
+    let (output, clean) = report(&flags, b"plain text");
+    assert_eq!(output.status.code(), Some(8));
+    assert_eq!(
+        clean["analysis_coverage"]["status"],
+        "complete_within_configured_scope"
+    );
+    assert_eq!(
+        clean["metadata"]["patterns_sha256"],
+        json["metadata"]["patterns_sha256"]
+    );
+    let (_, other) = report(&["--category", "ip_address"], b"plain text");
+    assert_ne!(
+        other["metadata"]["patterns_sha256"],
+        json["metadata"]["patterns_sha256"]
+    );
+}
+
+#[test]
+fn decode_limits_survive_match_filtering() {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let encoded = engine.encode("https://example.com");
+    for (args, input) in [
+        (vec!["--max-decode-bytes", "2"], format!("config={encoded}")),
+        (vec!["--decode-depth", "1"], engine.encode(&encoded)),
+        (
+            vec!["--max-decode-bytes", "19"],
+            format!("{encoded};{encoded}"),
+        ),
+        (
+            vec![],
+            std::iter::repeat_n("aGVsbG8=", 130)
+                .collect::<Vec<_>>()
+                .join(";"),
+        ),
+    ] {
+        let mut flags = vec!["--category", "Email", "--inconclusive-exit-code", "9"];
+        flags.extend(args);
+        let (output, json) = report(&flags, input.as_bytes());
+        assert_eq!(output.status.code(), Some(9), "{input}");
+        assert_eq!(
+            json["analysis_coverage"]["limitations"]["decode_limited_strings"],
+            1
+        );
+    }
+}
+
+#[test]
+fn jsonl_completion_reports_coverage_and_build() {
+    let output = run(
+        &["-s", "--jsonl", "--max-string-bytes", "4", "-"],
+        b"long string",
+    );
+    let events: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let last = events.last().unwrap();
+    assert_eq!(last["type"], "complete");
+    assert_eq!(last["data"]["processing_complete"], true);
+    assert_eq!(last["data"]["analysis_coverage"]["status"], "limited");
+    assert!(last["data"]["metadata"]["target"].is_string());
+}
+
+#[test]
+fn coverage_counts_omitted_details_and_comparison_limits() {
+    let input = std::iter::repeat_n("https://example.com", 1002)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (_, json) = report(&["--category", "URL", "--no-decode"], input.as_bytes());
+    assert_eq!(
+        json["analysis_coverage"]["limitations"]["strings_with_omitted_details"],
+        1
+    );
+    assert_eq!(
+        json["strings"][0]["match_details"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1000
+    );
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&input);
+    let (_, json) = report(&["--category", "URL"], encoded.as_bytes());
+    assert_eq!(
+        json["analysis_coverage"]["limitations"]["decoded_layers_with_omitted_details"],
+        1
+    );
+    let mut other = tempfile::NamedTempFile::new().unwrap();
+    other
+        .write_all(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .unwrap();
+    let (output, json) = report(
+        &[
+            "--compare",
+            other.path().to_str().unwrap(),
+            "--max-string-bytes",
+            "8",
+            "--no-decode",
+            "--inconclusive-exit-code",
+            "9",
+        ],
+        b"hello",
+    );
+    assert_eq!(output.status.code(), Some(9));
+    assert_eq!(
+        json["analysis_coverage"]["limitations"]["truncated_strings"],
+        1
+    );
+    assert_eq!(
+        json["analysis_coverage"]["limitations"]["comparison_limited"],
+        true
+    );
+}
+
+#[test]
+fn custom_url_rules_keep_their_original_span_and_provenance() {
+    let mut patterns = tempfile::NamedTempFile::new().unwrap();
+    patterns.write_all(b"URL = 'custom!'").unwrap();
+    let (_, custom) = report(
+        &["--patterns", patterns.path().to_str().unwrap()],
+        b"custom!",
+    );
+    let detail = &custom["strings"][0]["match_details"][0];
+    assert_eq!(detail["text"], "custom!");
+    assert_eq!(detail["validation"]["status"], "candidate");
+    let (_, builtin) = report(&[], b"custom!");
+    assert_ne!(
+        custom["metadata"]["patterns_sha256"],
+        builtin["metadata"]["patterns_sha256"]
+    );
+    let output = run(&["--version"], b"");
+    let version = String::from_utf8(output.stdout).unwrap();
+    assert!(version.contains(env!("CARGO_PKG_VERSION")));
+    assert!(version.contains(custom["metadata"]["source_sha256"].as_str().unwrap()));
 }

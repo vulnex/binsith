@@ -64,7 +64,37 @@ pub fn validate(
                 result(Status::Invalid, "Luhn checksum failed")
             }
         }
+        "URL" => {
+            // Preserve evidence verbatim; parser normalization is never substituted.
+            let parsed = url::Url::parse(text);
+            if text.contains('\\')
+                || text.chars().any(char::is_control)
+                || text.as_bytes().iter().enumerate().any(|(i, b)| {
+                    *b == b'%'
+                        && (i + 2 >= text.len()
+                            || !text.as_bytes()[i + 1].is_ascii_hexdigit()
+                            || !text.as_bytes()[i + 2].is_ascii_hexdigit())
+                })
+            {
+                return result(Status::Invalid, "Invalid URL escape or separator");
+            }
+            match parsed {
+                Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
+                    result(
+                        Status::Validated,
+                        "HTTP(S) URL syntax passed; destination and reachability not checked",
+                    )
+                }
+                _ => result(Status::Invalid, "Invalid HTTP(S) URL syntax"),
+            }
+        }
         "ip_address" => {
+            let token_char = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+            if value[..start].chars().next_back().is_some_and(token_char)
+                || value[end..].chars().next().is_some_and(token_char)
+            {
+                return None;
+            }
             if text.parse::<std::net::Ipv4Addr>().is_ok() {
                 result(
                     Status::Validated,
@@ -158,4 +188,51 @@ mod tests {
             assert!(validation.reason.contains("Custom"));
         }
     }
+}
+
+/// Trim prose delimiters only for the bundled URL rule.
+pub fn match_end(name: &str, regex: &Regex, value: &str, start: usize, end: usize) -> usize {
+    if name != "URL" {
+        return end;
+    }
+    static URL_PATTERN: OnceLock<String> = OnceLock::new();
+    let builtin = URL_PATTERN.get_or_init(|| {
+        let patterns: BTreeMap<String, String> =
+            toml::from_str(include_str!("regex_patterns.toml")).unwrap();
+        patterns["URL"].clone()
+    });
+    if regex.as_str() != builtin {
+        return end;
+    }
+    let mut text = &value[start..end];
+    // Count once so adversarial runs of closing brackets stay linear.
+    let mut excess = [
+        text.matches(')')
+            .count()
+            .saturating_sub(text.matches('(').count()),
+        text.matches(']')
+            .count()
+            .saturating_sub(text.matches('[').count()),
+        text.matches('}')
+            .count()
+            .saturating_sub(text.matches('{').count()),
+    ];
+    while let Some(last) = text.chars().next_back() {
+        let bracket = match last {
+            ')' => Some(0),
+            ']' => Some(1),
+            '}' => Some(2),
+            _ => None,
+        };
+        let unmatched = bracket.is_some_and(|i| excess[i] > 0);
+        if matches!(last, '.' | ',' | ';' | '!') || unmatched {
+            if let Some(i) = bracket {
+                excess[i] -= 1;
+            }
+            text = &text[..text.len() - last.len_utf8()];
+        } else {
+            break;
+        }
+    }
+    start + text.len()
 }

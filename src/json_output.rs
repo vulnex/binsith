@@ -105,12 +105,27 @@ impl<W: Write> JsonWriter<W> {
         serde_json::to_writer(&mut self.out, comparison)?;
         Ok(())
     }
-    pub fn finish(mut self) -> io::Result<()> {
+    #[cfg(test)]
+    pub fn finish(self) -> io::Result<()> {
+        self.finish_report(&serde_json::Value::Null, &serde_json::Value::Null)
+    }
+    pub fn finish_report(
+        mut self,
+        metadata: &serde_json::Value,
+        coverage: &serde_json::Value,
+    ) -> io::Result<()> {
         if self.jsonl {
-            self.event("complete", &serde_json::json!({"complete":true}))?;
+            self.event("complete", &serde_json::json!({"complete":true,"processing_complete":true,"metadata":metadata,"analysis_coverage":coverage}))?;
         } else {
             self.close_arrays()?;
-            writeln!(self.out, ",\"complete\":true}}")?;
+            write!(self.out, ",\"metadata\":")?;
+            serde_json::to_writer(&mut self.out, metadata)?;
+            write!(self.out, ",\"analysis_coverage\":")?;
+            serde_json::to_writer(&mut self.out, coverage)?;
+            writeln!(
+                self.out,
+                ",\"complete\":true,\"processing_complete\":true}}"
+            )?;
         }
         self.out.flush()
     }

@@ -117,19 +117,20 @@ overlapping interpretations or duplicate primary-pass results. These findings
 have `extraction: "embedded_utf16_candidate"`; primary results use `"text"`.
 Embedded candidates follow primary findings and are not globally offset-sorted.
 
-Base64 decoding applies to an entire extracted run, accepts standard padded
-Base64 and UTF-8 results, and classifies each decoded layer with the same patterns
-and validation. Tokens embedded in surrounding prose are not separately decoded.
+Base64 decoding accepts whole extracted runs and embedded standard padded tokens
+that produce UTF-8 text. Each decoded layer uses the same patterns and validation.
+Embedded tokens require at least eight characters; up to 128 are considered per run.
 `--decode-depth` defaults to 1, allows 0–8, and limits nested decoding. `-D`, depth
 0, or decode byte limit 0 disables decoding. Category and `-S` filters consider
 matches in decoded layers as well as original text.
 
 `decoded` preserves the first decoded text for compatibility. `decoded_layers`
 contains each layer's text, depth, category list, validation details, and decoding
-stop state. All layers carry the original encoded run's `source_offset` and
+stop state. Each chain carries its original encoded token's `source_offset` and
 `source_end_offset`. Their match offsets are UTF-8 byte positions **inside that
 layer**, explicitly labeled `offset_space: "decoded_layer_utf8"`; they are not
-pretended to be direct file offsets. The ordered depths form the decoding chain.
+pretended to be direct file offsets. Depth resets to 1 for each new token; the
+source envelope identifies its decoding chain.
 `next_decode` is `decoded`, `not_utf8_base64`, `byte_limit`, or `depth_limit`.
 A limit state means further decoding was not attempted.
 
@@ -143,7 +144,7 @@ produce false results. They remain visible as incomplete-analysis notices under
 filters; empty matches on these runs do not imply absence of indicators.
 
 `--max-decode-bytes` defaults to 262144 and bounds cumulative decoded text across
-all layers of one run. Decoded detail output has the same per-layer detail caps.
+all tokens and layers of one run. Decoded detail output has the same per-layer detail caps.
 Original `decode_status` is `decoded`, `disabled`, `truncated`, `limit`, or
 `not_utf8_base64`; size-limit states do not certify valid Base64.
 
@@ -209,3 +210,62 @@ Quiet mode suppresses human output, not reports or errors. Closed stdout pipes
 are quiet early termination in terminal-only mode. With a named report, analysis
 continues and publishes it despite a closed terminal pipe. Other terminal errors
 are reported after saving the report; report failures remain fatal.
+
+### Reliability and provenance (0.2.0)
+
+`binsith --version` prints the version, Git revision, source SHA-256, target,
+and build profile (`-V` prints the short version). The source fingerprint covers
+`Cargo.toml`, `Cargo.lock`, `build.rs`, and files under `src/`; it identifies the
+compiled inputs even when local source edits differ from the recorded revision.
+It is an identity aid, not a signature or proof of reproducible compilation.
+
+JSON reports add `metadata` with build identity, compiler version, effective
+encoding and decoding state, parsed CLI configuration, and an SHA-256 fingerprint
+of the effective patterns. Pattern hashing uses compact JSON serialization of
+sorted `[name, expression]` pairs after category selection. JSONL puts these fields
+in the final `complete` event's `data`. These are additive schema-version-1 fields.
+
+`complete` and `processing_complete` mean the requested processing finished.
+`analysis_coverage.status` separately reports `limited` or
+`complete_within_configured_scope`. Limitation counts identify truncated strings,
+strings and decoded layers with omitted match details, and strings with decoding
+limits. Comparison limits are reported as a boolean. Counts cover both inputs
+when comparing and all enabled extraction passes; they are not deduplicated counts
+of physical byte ranges. The configured range, minimum length, encoding, categories,
+and disabled decoding define the chosen scope. Complete coverage within that scope
+is **not proof that a file is safe**.
+
+Use an optional exit policy for automation:
+
+```sh
+binsith -s sample.bin --match-exit-code 7 --no-match-exit-code 8 --inconclusive-exit-code 9 -j report.json
+```
+
+Processing errors fail as before. Otherwise a primary-input indicator returns the
+match code, even if coverage is limited. With no primary-input indicator, a limited
+scan returns the inconclusive code when configured, falling back to the no-match
+code otherwise. Comparison-input limitations also make coverage limited. The
+inconclusive option enables string analysis. Matching-only/category output retains
+limit notices so filtering cannot hide incomplete analysis.
+
+HTTP(S) extraction now retains ports, query parameters, fragments, percent escapes,
+and bracketed IPv6 hosts. A URL parser checks syntax; no network requests are made.
+Original evidence and offsets are preserved. Trailing prose punctuation (`.,;!`)
+and unmatched closing brackets are excluded by the bundled URL rule; when these
+are intentional URL characters, use percent encoding or a custom pattern. Windows
+drive paths support backslashes and spaces. IPv4 candidates embedded in larger
+dotted or alphanumeric tokens are suppressed. Custom patterns retain their spans
+and candidate classification.
+
+Base64 decoding handles standard padded tokens inside assignments and quoted text,
+as well as whole extracted strings. Embedded tokens must contain at least eight
+characters. Each token's decoded layers carry its exact original byte envelope;
+match offsets inside a decoded layer remain UTF-8 offsets relative to that layer.
+Nested decoding treats each decoded layer as a whole Base64 value. URL-safe and
+unpadded variants are not supported. A shared per-string decoded-byte budget and
+128-candidate cap bound work across tokens. Depth limits are reported conservatively
+when another syntactically plausible Base64 layer remains. `decoded` remains a
+compatibility field containing the first successful decoded token.
+
+The GitHub Actions workflow runs formatting and debug/release tests on Linux,
+macOS, and Windows. Local verification does not imply these remote jobs have run.
