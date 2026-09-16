@@ -16,6 +16,7 @@ cross-platform production readiness.
 - Validate legacy Litecoin and transparent Zcash Base58Check checksums; mark
   path-shaped URL fragments invalid as evidence of local files.
 - Stop polling exhausted regex iterators during fair retention.
+- Fix a fuzz-discovered panic when multibyte Unicode whitespace precedes a path.
 
 ### Compatibility
 

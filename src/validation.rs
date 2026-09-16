@@ -154,8 +154,7 @@ pub fn validate(
                 context_start += 1;
             }
             let context = &value[context_start..start];
-            let token_start = context.rfind(char::is_whitespace).map_or(0, |i| i + 1);
-            let prefix = &context[token_start..];
+            let prefix = context.rsplit(char::is_whitespace).next().unwrap_or("");
             if prefix.contains(":/") || prefix.ends_with(':') && text.starts_with("//") {
                 return result(
                     Status::Invalid,
@@ -463,6 +462,15 @@ mod evidence_tests {
             check("file_path", "/tmp/notes.txt").status,
             Status::Candidate
         );
+    }
+    #[test]
+    fn unicode_whitespace_before_path_does_not_split_a_codepoint() {
+        for separator in ['\u{2001}', '\u{00a0}', '\u{3000}'] {
+            let input = format!("prefix{separator}/tmp/file.txt");
+            assert_eq!(check("file_path", &input).status, Status::Candidate);
+            let input = format!("prefix{separator}https://example.org/file.txt");
+            assert_eq!(check("file_path", &input).status, Status::Invalid);
+        }
     }
     #[test]
     fn context_is_bounded_unicode_safe_and_custom_rules_uninterpreted() {
