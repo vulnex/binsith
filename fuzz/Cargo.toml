@@ -1,0 +1,28 @@
+[package]
+name = "binsith-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+regex = "1.5"
+toml = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+clap = { version = "4.2", features = ["derive"] }
+url = "2.5"
+
+[[bin]]
+name = "strings"
+path = "fuzz_targets/strings.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
