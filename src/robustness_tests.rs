@@ -197,3 +197,212 @@ fn large_runs_nested_decoding_and_output_failures_stay_bounded() {
     .unwrap_err();
     assert_eq!(error.to_string(), "injected output failure");
 }
+
+/// Alternate short successful reads with Interrupted, or fail at an exact byte.
+struct FaultReader<'a> {
+    bytes: &'a [u8],
+    position: usize,
+    fail_at: Option<usize>,
+    interrupt_next: bool,
+}
+impl Read for FaultReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        if self.interrupt_next {
+            self.interrupt_next = false;
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        self.interrupt_next = true;
+        if self.fail_at == Some(self.position) {
+            return Err(io::Error::other("injected read failure"));
+        }
+        if self.position == self.bytes.len() {
+            return Ok(0);
+        }
+        out[0] = self.bytes[self.position];
+        self.position += 1;
+        Ok(1)
+    }
+}
+
+#[test]
+fn interrupted_reads_preserve_findings_summary_and_snapshot() {
+    use crate::file_summary::{summarize, SummaryReader};
+    use std::io::{Seek, SeekFrom};
+    let patterns = load_patterns(None).unwrap();
+    for (input, encoding) in [
+        (
+            b"https://example.com\0caf\xc3\xa9\0".to_vec(),
+            Encoding::Utf8,
+        ),
+        (
+            "https://example.com\0😀tail"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            Encoding::Utf16le,
+        ),
+        (
+            "https://example.com\0😀tail"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+            Encoding::Utf16be,
+        ),
+    ] {
+        for embedded in [false, true] {
+            let reader = FaultReader {
+                bytes: &input,
+                position: 0,
+                fail_at: None,
+                interrupt_next: true,
+            };
+            let mut observed = SummaryReader::new(reader, Some(tempfile::tempfile().unwrap()));
+            let limits = Limits {
+                max_string_bytes: 64,
+                max_decode_bytes: 48,
+                min_length: 1,
+                decode_depth: 3,
+            };
+            let mut findings = Vec::new();
+            let emit = |f| {
+                check(&f, &input, limits);
+                findings.push(f);
+                Ok(())
+            };
+            if embedded {
+                scan_embedded_utf16(&mut observed, &patterns, true, false, limits, emit).unwrap();
+            } else {
+                analyze_reader_with_encoding(
+                    &mut observed,
+                    &patterns,
+                    true,
+                    false,
+                    limits,
+                    encoding,
+                    emit,
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                serde_json::to_value(findings).unwrap(),
+                scan(&input, 65536, encoding, embedded, &patterns).unwrap()
+            );
+            let (summary, snapshot) = observed.finish("fixture");
+            assert_eq!(
+                serde_json::to_value(summary).unwrap(),
+                serde_json::to_value(summarize("fixture", &input)).unwrap()
+            );
+            let mut snapshot = snapshot.unwrap();
+            snapshot.seek(SeekFrom::Start(0)).unwrap();
+            let mut copied = Vec::new();
+            snapshot.read_to_end(&mut copied).unwrap();
+            assert_eq!(copied, input);
+        }
+    }
+}
+
+#[test]
+fn hard_read_failures_propagate_at_every_byte_boundary() {
+    let patterns = load_patterns(None).unwrap();
+    for (input, encoding) in [
+        (
+            b"https://example.com\0caf\xc3\xa9\0tail".to_vec(),
+            Encoding::Utf8,
+        ),
+        (
+            "https://example.com\0😀tail"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            Encoding::Utf16le,
+        ),
+        (
+            "https://example.com\0😀tail"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+            Encoding::Utf16be,
+        ),
+    ] {
+        for fail_at in 0..=input.len() {
+            for embedded in [false, true] {
+                let reader = FaultReader {
+                    bytes: &input,
+                    position: 0,
+                    fail_at: Some(fail_at),
+                    interrupt_next: true,
+                };
+                let mut observed = crate::file_summary::SummaryReader::new(reader, None);
+                let mut output = Vec::new();
+                let mut writer = crate::json_output::JsonWriter::live(&mut output).unwrap();
+                let emit = |f| {
+                    check(&f, &input[..fail_at], Limits::default());
+                    writer.finding(&f)
+                };
+                let result = if embedded {
+                    scan_embedded_utf16(
+                        &mut observed,
+                        &patterns,
+                        true,
+                        false,
+                        Limits::default(),
+                        emit,
+                    )
+                } else {
+                    analyze_reader_with_encoding(
+                        &mut observed,
+                        &patterns,
+                        true,
+                        false,
+                        Limits::default(),
+                        encoding,
+                        emit,
+                    )
+                };
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "injected read failure",
+                    "at {fail_at}"
+                );
+                drop(writer);
+                let events: Vec<serde_json::Value> = String::from_utf8(output)
+                    .unwrap()
+                    .lines()
+                    .map(|s| serde_json::from_str(s).unwrap())
+                    .collect();
+                assert_eq!(events[0]["type"], "start");
+                assert!(events
+                    .iter()
+                    .all(|e| e["type"] == "start" || e["type"] == "string"));
+            }
+        }
+    }
+}
+
+#[test]
+fn snapshot_write_failure_stops_live_analysis() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("read-only-snapshot");
+    std::fs::write(&path, b"original").unwrap();
+    let snapshot = std::fs::File::open(&path).unwrap();
+    let mut observed = crate::file_summary::SummaryReader::new(&b"hello\0"[..], Some(snapshot));
+    let mut emitted = 0;
+    let result = analyze_reader_with_encoding(
+        &mut observed,
+        &[],
+        false,
+        false,
+        Limits::default(),
+        Encoding::Auto,
+        |_| {
+            emitted += 1;
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(emitted, 0);
+    assert_eq!(std::fs::read(path).unwrap(), b"original");
+}

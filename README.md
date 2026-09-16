@@ -358,3 +358,15 @@ and scheduler load, thermal state, and filesystem cache can affect results.
 CI runs the Rust checks with a 15-minute job timeout. Linux additionally runs a
 small process-level stress/benchmark smoke check; timing comparisons are kept local
 to avoid treating noise from shared CI runners as performance regressions.
+
+The robustness suite also injects `Interrupted` reads and hard failures at every
+byte boundary of UTF-8/UTF-16 fixtures, including split surrogate pairs. Retried
+reads must preserve findings, hashes, and captured snapshot bytes. Snapshot-write
+failures must stop analysis. CLI cancellation checks terminate an active process
+after a finding is written and verify that stdout has no completion marker and an
+existing named report remains unchanged. A forceful kill can leave temporary files;
+it does not publish the temporary report over the destination.
+
+Normal EOF is a valid end of input, including when supplied by another program.
+BinSith cannot infer whether that upstream program failed before closing its pipe;
+consumers should check the upstream process status as well as report completion.
