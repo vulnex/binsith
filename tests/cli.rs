@@ -1105,3 +1105,112 @@ fn live_failure_has_no_completion_and_limits_keep_exit_policy() {
     .unwrap();
     assert_eq!(last["data"]["analysis_coverage"]["status"], "limited");
 }
+
+#[test]
+fn cancelling_live_stdout_leaves_no_completion_marker() {
+    use std::io::BufRead;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_binsith"))
+        .args(["--live-jsonl", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    stdin.write_all(b"https://example.com\0").unwrap();
+    stdin.flush().unwrap();
+    let first = rx.recv_timeout(Duration::from_secs(10));
+    let second = rx.recv_timeout(Duration::from_secs(10));
+    child.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+    drop(stdin);
+    reader.join().unwrap();
+    assert!(!output.status.success());
+    let parse = |s: String| serde_json::from_str::<serde_json::Value>(&s).unwrap();
+    assert_eq!(parse(first.unwrap().unwrap())["type"], "start");
+    assert_eq!(parse(second.unwrap().unwrap())["type"], "string");
+    assert!(rx
+        .into_iter()
+        .all(|line| parse(line.unwrap())["type"] != "complete"));
+}
+
+#[test]
+fn cancelling_live_named_report_preserves_previous_destination() {
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("report.jsonl");
+    std::fs::write(&destination, b"previous report").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_binsith"))
+        .args(["--live-jsonl", "-j", destination.to_str().unwrap(), "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"https://example.com\0").unwrap();
+    stdin.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut finding_written = false;
+    while Instant::now() < deadline {
+        finding_written = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path() != destination)
+            .any(|entry| {
+                std::fs::read_to_string(entry.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .any(|event| event["type"] == "string")
+            });
+        if finding_written {
+            break;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    drop(stdin);
+    assert!(finding_written, "no partial finding observed: {output:?}");
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(destination).unwrap(), b"previous report");
+}
+
+#[test]
+fn unreadable_input_never_publishes_a_complete_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("report.jsonl");
+    std::fs::write(&destination, b"previous report").unwrap();
+    let output = run(
+        &[
+            "--live-jsonl",
+            dir.path().to_str().unwrap(),
+            "-j",
+            destination.to_str().unwrap(),
+        ],
+        b"",
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(destination).unwrap(), b"previous report");
+    let output = run(&["--live-jsonl", dir.path().to_str().unwrap()], b"");
+    assert!(!output.status.success());
+    for line in String::from_utf8(output.stdout).unwrap().lines() {
+        let event: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_ne!(event["type"], "complete");
+    }
+}
