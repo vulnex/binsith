@@ -154,6 +154,11 @@ up to four limited prefixes. Combined modes and embedded scanning snapshot the
 selected input range to private temporary disk storage for consistent passes and
 stdin support. Comparisons also snapshot the selected range of the other file.
 Allow temporary space for those ranges. Other single modes stream directly.
+Regular files with a reported nonzero size seek directly to `--offset`, avoiding
+reads of the discarded prefix. Stdin, pipes, devices, and zero-size virtual files
+consume that prefix sequentially. An offset exactly at EOF selects an empty range;
+an offset beyond EOF is an error, including with `--length 0`. Analyze stable files
+for consistent results; concurrent file modification is not synchronized.
 
 ## Regional entropy
 
