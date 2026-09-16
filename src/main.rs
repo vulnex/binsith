@@ -21,7 +21,11 @@ use std::io::{self, Write};
 )]
 struct Args {
     /// Input file, or - for standard input
-    file: String,
+    #[arg(required_unless_present = "list_categories")]
+    file: Option<String>,
+    /// List available bundled/custom pattern categories without reading a sample
+    #[arg(long, conflicts_with_all = ["file", "summary", "strings", "matches_only", "hex", "no_decode", "output", "max_string_bytes", "max_decode_bytes", "encoding", "scan_utf16", "offset", "length", "min_length", "categories", "decode_depth", "entropy", "entropy_window", "entropy_threshold", "jsonl", "live_jsonl", "export_indicators", "export_format", "export_validation", "quiet", "match_exit_code", "no_match_exit_code", "inconclusive_exit_code", "compare"])]
+    list_categories: bool,
     /// Print file summary (the default if no analysis mode is selected)
     #[arg(short = 'i', long = "summary")]
     summary: bool,
@@ -96,6 +100,14 @@ struct Args {
         requires = "export_indicators"
     )]
     export_format: indicator_export::Format,
+    /// Export all matches, actionable candidates/validated matches, or validated only
+    #[arg(
+        long,
+        value_enum,
+        default_value = "all",
+        requires = "export_indicators"
+    )]
+    export_validation: indicator_export::ValidationFilter,
     /// Suppress human-readable output
     #[arg(short, long)]
     quiet: bool,
@@ -198,6 +210,16 @@ fn has_hit(f: &string_analysis::StringFinding) -> bool {
 }
 fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     use std::io::Seek;
+    if args.list_categories {
+        let patterns = string_analysis::load_patterns(args.patterns.as_deref())?;
+        let mut stdout = io::BufWriter::new(io::stdout());
+        for (name, _) in patterns {
+            writeln!(stdout, "{}", utils::escape_string(&name))?;
+        }
+        stdout.flush()?;
+        return Ok(0);
+    }
+    let input_path = args.file.as_deref().ok_or("input file is required")?;
     if args.live_jsonl {
         args.jsonl = true;
     }
@@ -264,7 +286,7 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     if !args.categories.is_empty() {
         patterns.retain(|(name, _)| args.categories.contains(name));
     }
-    let mut input = utils::ranged_input(&args.file, args.offset, args.length)?;
+    let mut input = utils::ranged_input(input_path, args.offset, args.length)?;
     let terminal: Box<dyn Write> = if human {
         Box::new(io::stdout())
     } else {
@@ -299,7 +321,7 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         None => input.as_mut(),
     };
     let mut summary = if want_summary && !args.live_jsonl {
-        Some(file_summary::summarize_reader(&args.file, reader)?)
+        Some(file_summary::summarize_reader(input_path, reader)?)
     } else {
         None
     };
@@ -365,7 +387,7 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     let mut indicators = args
         .export_indicators
         .as_ref()
-        .map(|_| indicator_export::Index::default());
+        .map(|_| indicator_export::Index::new(args.export_validation));
     if want_strings {
         if human {
             writeln!(out, "Offset\tEncoding\tLength\tAnalysis\tString")?;
@@ -390,7 +412,7 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         if args.live_jsonl {
             let mut observed = file_summary::SummaryReader::new(input.as_mut(), snapshot.take());
             scan_pass(&mut observed, &args, &patterns, false, &mut emit)?;
-            let (finished_summary, captured) = observed.finish(&args.file);
+            let (finished_summary, captured) = observed.finish(input_path);
             summary = Some(finished_summary);
             snapshot = captured;
         } else {
