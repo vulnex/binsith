@@ -925,7 +925,9 @@ mod tests {
             let detail = &found[0].match_details[0];
             assert_eq!((detail.offset, detail.end_offset), (8, 22));
             let units: Vec<_> = bytes[detail.offset..detail.end_offset]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| {
                     if little {
                         u16::from_le_bytes([c[0], c[1]])

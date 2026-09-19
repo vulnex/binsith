@@ -27,6 +27,8 @@ loaded libraries. Static corpus evaluation is separate and remains local.
 python3 tools/package_release.py
 ```
 
+The local packager currently supports only macOS ARM64 (`aarch64-apple-darwin`).
+
 The packager requires a clean checkout and a binary whose reported version,
 revision, and source fingerprint match it. It includes only the trusted binary,
 README.md, CHANGELOG.md, RELEASE.md, and generated BUILD-INFO.json. It validates

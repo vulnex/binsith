@@ -4,6 +4,9 @@ BinSith analyzes binary data: hashes, MIME signatures, strings, indicators,
 encoded content, hex dumps, regional entropy, and differences between files.
 It does not inspect executable headers, sections, imports, or entry points.
 
+See the [release notes](CHANGELOG.md) and [release candidate procedure](RELEASE.md)
+for compatibility changes, packaging instructions, and promotion gates.
+
 ## Build and verify
 
 ```sh
