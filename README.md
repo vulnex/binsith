@@ -293,10 +293,17 @@ Original `decode_status` is `decoded`, `disabled`, `truncated`, `limit`, or
 
 Summaries and entropy use fixed-size read buffers. Hex uses 64 KiB reads with
 16-byte rows. String memory scales with configured caps; embedded scanning holds
-up to four limited prefixes. Without `--live-jsonl`, combined modes and embedded scanning snapshot the
-selected input range to private temporary disk storage for consistent passes and
-stdin support. Comparisons also snapshot the selected range of the other file.
-Allow temporary space for those ranges. Other single modes stream directly.
+up to four limited prefixes. Basic quiet JSON string reports (`-q -s -j report.json`,
+including reports to `-j -`) accumulate hashes and the summary during string
+extraction, without an input snapshot. These reports write the `strings` field
+before `file_summary`; consume JSON by field name, not property position. Named
+reports still use a temporary output file for atomic publication.
+
+Regional entropy or embedded UTF-16 adds passes that retain a private snapshot of
+the selected range. Other non-live combined modes also use snapshots for
+consistent passes and stdin support. Comparisons snapshot the selected range of
+the other file. Allow temporary space for these input ranges and output reports.
+Other single modes stream directly.
 Regular files with a reported nonzero size seek directly to `--offset`, avoiding
 reads of the discarded prefix. Stdin, pipes, devices, and zero-size virtual files
 consume that prefix sequentially. An offset exactly at EOF selects an empty range;
@@ -431,8 +438,9 @@ cat sample.bin | binsith --live-jsonl --category URL -
 then `complete`. The start event has `data.schema_version: 1`,
 `data.mode: "live_jsonl"`, and `data.summary_position: "end"`. The final summary
 uses the same fields as the standard JSONL summary. Build/configuration metadata
-and analysis coverage remain in the completion event. Existing `--jsonl` and JSON
-reports retain their ordering and behavior.
+and analysis coverage remain in the completion event. Existing `--jsonl` event
+ordering is unchanged. Ordinary JSON reports preserve their fields and values;
+property order can vary, including strings-first basic quiet reports.
 
 Each live event is flushed immediately. A string finding is available when its
 run ends (a delimiter or EOF), not while the string is still arriving. Filters
