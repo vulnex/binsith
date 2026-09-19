@@ -18,6 +18,7 @@ cross-platform production readiness.
 - Stop polling exhausted regex iterators during fair retention.
 - Fix a fuzz-discovered panic when multibyte Unicode whitespace precedes a path.
 - Preserve independent path candidates in quoted fields following a URL.
+- Close analyzed inputs before replacing report destinations on Windows.
 
 ### Compatibility
 

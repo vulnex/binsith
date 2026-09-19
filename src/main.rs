@@ -520,6 +520,10 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
             json.comparison(&comparison)?;
         }
     }
+    // Analysis is complete. Close input handles before replacing destinations,
+    // which may refer to the input file; Windows can reject an open destination.
+    drop(input);
+    drop(snapshot);
     if let Some(index) = indicators.as_ref() {
         coverage.indicator_export_limited = index.limited();
         indicator_export::save(
