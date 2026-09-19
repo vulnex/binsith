@@ -1,0 +1,59 @@
+name: Release packages
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/release-packages.yml'
+      - 'tools/package_release.py'
+  pull_request:
+    paths:
+      - '.github/workflows/release-packages.yml'
+      - 'tools/package_release.py'
+permissions:
+  contents: read
+jobs:
+  package:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Preserve committed source bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          path: packaging-tools
+      - name: Check out the published candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: 653582dfb86b7578f5aae9b8940c96a154874d52
+          path: release-source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: rustup toolchain install stable --profile minimal
+      - name: Verify release source
+        working-directory: release-source
+        run: cargo +stable test --release --locked
+      - name: Build native release binary
+        working-directory: release-source
+        run: cargo +stable build --release --locked
+      - name: Check JSON and CSV consumers
+        run: python release-source/tools/check_export_compatibility.py
+      - name: Package and smoke-test extracted binary
+        run: python packaging-tools/tools/package_release.py --root release-source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binsith-0.4.2-rc.1-${{ matrix.target }}
+          path: |
+            release-source/dist/*.tar.gz
+            release-source/dist/*.zip
+            release-source/dist/SHA256SUMS-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
