@@ -1,8 +1,13 @@
 # BinSith
 
+<img src="assets/branding/binsith-logo.png" alt="BinSith Byte Monogram logo" width="420">
+
 BinSith analyzes binary data: hashes, MIME signatures, strings, indicators,
 encoded content, hex dumps, regional entropy, and differences between files.
 It does not inspect executable headers, sections, imports, or entry points.
+
+See the [release notes](CHANGELOG.md) and [release candidate procedure](RELEASE.md)
+for compatibility changes, packaging instructions, and promotion gates.
 
 ## Build and verify
 
@@ -86,7 +91,8 @@ exact text, source byte range, and a `validation` object with status and reason:
 
 Built-in checks cover 13–19 digit payment-card candidates (Luhn and rejection of
 all-identical digits), IPv4 parsing, UUID hexadecimal grouping, and consistent
-48-bit MAC separators. Other categories, including cryptocurrency addresses,
+48-bit MAC separators, plus Base58Check length/alphabet/checksum checks for
+legacy Litecoin and transparent Zcash candidates. Other cryptocurrency formats
 remain candidates. No credential or network verification is performed.
 
 Generic `api_key` results require a bounded 32–64 character alphanumeric token
@@ -100,8 +106,24 @@ expression exactly match a bundled rule, which inherits its validation.
 Matches are grouped by category, then source order. Matches from different
 patterns may overlap; occurrences within one regex do not overlap. Zero-width
 matches have empty text and equal offsets. Each run retains at most 1000 details
-and 1 MiB of matched text; `match_details_truncated` indicates omissions. Category
-and actionable-match detection continue beyond that detail cap.
+and 1 MiB of matched text. Retention takes turns across categories, then displays
+retained matches grouped by category and source order. A noisy category cannot
+exhaust the detail count before later categories get a turn. These remain shared
+limits, so a broad scan can still omit evidence; a focused category pass can help.
+`match_details_truncated` indicates omissions, and `match_details_omitted` records
+exact omitted counts by category. Category and actionable-match detection continue
+beyond that detail cap.
+
+Each detail also includes `evidence`: up to 48 Unicode characters before and after
+the match in its extracted/decoded string, and an optional `boundary_warning`.
+Human output escapes this text; JSON/CSV retain it as structured data. Multiple URL
+schemes, possible printable certificate/OCSP URI trailers, or numeric suffixes
+in alphabetic hostname final labels trigger heuristic boundary warnings. Private
+numeric-suffix domains and legitimate similarly named paths can also be flagged. Their original text and offsets remain unchanged, and otherwise valid
+ambiguous URLs remain candidates rather than validated results. These warnings do
+not parse ASN.1 or establish the correct boundary. Nonstandard/single-label hosts
+also remain candidates. Path-shaped fragments in URL context are marked invalid
+as local-file evidence; they remain in unfiltered output.
 
 ## Encodings and decoded analysis
 
@@ -411,8 +433,9 @@ count upstream matches omitted by analysis limits.
 
 JSON contains `context` and `indicators`. Context includes the selected-range file
 summary and hashes, configuration/build metadata, analysis coverage, and export
-limit counters. The index retains at most 10,000 unique indicators, 16 MiB of
-category/value bytes (excluding storage overhead and duplicated index keys), and
+limit counters, and `upstream_omitted_details_by_category`. Each location includes
+its own evidence context, including for decoded findings. The index retains at most 10,000 unique indicators, 16 MiB of
+category/value and retained context bytes (excluding storage overhead and duplicated index keys), and
 64 locations per indicator. Beyond these limits, existing-entry occurrence counts
 continue, omitted observations are counted, and `export_limited` is true. Upstream
 truncation is reported separately through `analysis_coverage`. Export limits also

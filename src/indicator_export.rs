@@ -45,6 +45,7 @@ struct Location {
     decode_encoding: Option<&'static str>,
     decoded_offset: Option<usize>,
     decoded_end_offset: Option<usize>,
+    evidence: crate::validation::Evidence,
 }
 #[derive(Serialize)]
 struct Indicator {
@@ -66,6 +67,7 @@ pub struct Index {
     value_bytes: usize,
     filter: ValidationFilter,
     filtered_occurrences: u64,
+    upstream_omitted_details: BTreeMap<String, u64>,
     limits: LimitsReached,
 }
 impl Default for Index {
@@ -75,6 +77,7 @@ impl Default for Index {
             value_bytes: 0,
             filter: ValidationFilter::All,
             filtered_occurrences: 0,
+            upstream_omitted_details: BTreeMap::new(),
             limits: LimitsReached::default(),
         }
     }
@@ -127,14 +130,31 @@ impl Index {
         if entry.locations.contains(&location) {
             return;
         }
-        if entry.locations.len() == MAX_LOCATIONS {
+        let context_bytes = location.evidence.before.len() + location.evidence.after.len();
+        if entry.locations.len() == MAX_LOCATIONS
+            || context_bytes > MAX_VALUE_BYTES.saturating_sub(self.value_bytes)
+        {
             entry.locations_omitted += 1;
             self.limits.omitted_locations += 1;
         } else {
+            self.value_bytes += context_bytes;
             entry.locations.push(location);
         }
     }
     pub fn observe(&mut self, finding: &StringFinding) {
+        for counts in std::iter::once(&finding.match_details_omitted).chain(
+            finding
+                .decoded_layers
+                .iter()
+                .map(|layer| &layer.match_details_omitted),
+        ) {
+            for (category, count) in counts {
+                *self
+                    .upstream_omitted_details
+                    .entry(category.clone())
+                    .or_default() += *count as u64;
+            }
+        }
         for detail in &finding.match_details {
             self.insert(
                 detail,
@@ -147,6 +167,7 @@ impl Index {
                     decode_encoding: None,
                     decoded_offset: None,
                     decoded_end_offset: None,
+                    evidence: detail.evidence.clone(),
                 },
             );
         }
@@ -163,6 +184,7 @@ impl Index {
                         decode_encoding: Some(layer.encoding),
                         decoded_offset: Some(detail.offset),
                         decoded_end_offset: Some(detail.end_offset),
+                        evidence: detail.evidence.clone(),
                     },
                 );
             }
@@ -183,6 +205,8 @@ impl Index {
             "file_summary":summary, "metadata":metadata, "analysis_coverage":coverage,
             "validation_filter":self.filter, "filtered_occurrences":self.filtered_occurrences,
             "export_limited":self.limited(), "export_limits":self.limits,
+            "upstream_omitted_details_by_category":self.upstream_omitted_details,
+            "storage_budget_semantics":"Category/value and retained context bytes; excludes allocation overhead and duplicated keys",
             "max_indicators":MAX_INDICATORS,"max_value_bytes":MAX_VALUE_BYTES,"max_locations_per_indicator":MAX_LOCATIONS,
             "indicator_count":self.entries.len(), "scope":"primary_input_only",
             "count_semantics":"Observed retained match details across all extraction passes; omitted upstream details are not counted."});
@@ -313,8 +337,22 @@ pub fn destination_identity(path: &str) -> io::Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn context_storage_respects_export_budget() {
+        let mut index = Index {
+            value_bytes: MAX_VALUE_BYTES - 6,
+            ..Default::default()
+        };
+        let mut loc = location(0);
+        loc.evidence.before = "context".into();
+        index.insert(&detail("x".into()), loc);
+        assert!(index.limited());
+        assert_eq!(index.limits.omitted_locations, 1);
+        assert!(index.entries.values().next().unwrap().locations.is_empty());
+    }
     fn detail(text: String) -> MatchDetail {
         MatchDetail {
+            evidence: Default::default(),
             pattern: "test".into(),
             text,
             offset: 0,
@@ -327,6 +365,7 @@ mod tests {
     }
     fn location(offset: usize) -> Location {
         Location {
+            evidence: Default::default(),
             source_offset: offset,
             source_end_offset: offset + 1,
             source_encoding: "ASCII",

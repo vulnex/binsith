@@ -4,3 +4,7 @@
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+
+# Local malware-derived analysis; never publish or commit these exports.
+/evaluations/
+/dist/

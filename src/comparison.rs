@@ -125,6 +125,10 @@ pub struct Comparison {
     pub entropy_changes: Vec<EntropyChange>,
     pub entropy_changes_omitted: u64,
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Paired input streams/indexes and entropy settings are explicit at this internal boundary"
+)]
 pub fn compare(
     left_summary: &FileSummary,
     other_summary: FileSummary,

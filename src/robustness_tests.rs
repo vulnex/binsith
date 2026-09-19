@@ -367,7 +367,6 @@ fn hard_read_failures_propagate_at_every_byte_boundary() {
                     "injected read failure",
                     "at {fail_at}"
                 );
-                drop(writer);
                 let events: Vec<serde_json::Value> = String::from_utf8(output)
                     .unwrap()
                     .lines()
