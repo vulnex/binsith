@@ -1,3 +1,16 @@
+//
+// VULNEX -BinSith-
+//
+// File: string_analysis.rs
+// Author: Simon Roses Femerling
+// Created: 2026-09-16
+// Last Modified: 2026-09-19
+// Version: 0.4.2
+// License: Apache-2.0
+// Copyright (c) 2026 VULNEX. All rights reserved.
+// https://www.vulnex.com
+//
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use regex::Regex;
 use serde::Serialize;
