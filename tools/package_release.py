@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+#
+# VULNEX -BinSith-
+#
+# File: package_release.py
+# Author: Simon Roses Femerling
+# Created: 2026-09-19
+# Last Modified: 2026-09-19
+# Version: 0.4.2
+# License: Apache-2.0
+# Copyright (c) 2026 VULNEX. All rights reserved.
+# https://www.vulnex.com
+#
+
 """Package explicitly allowlisted release files, then verify and smoke-test them."""
 import argparse
 import hashlib
