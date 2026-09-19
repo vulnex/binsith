@@ -124,10 +124,7 @@ mod tests {
         struct FailingReader;
         impl std::io::Read for FailingReader {
             fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "read failure",
-                ))
+                Err(std::io::Error::other("read failure"))
             }
         }
         assert!(summarize_reader("fixture", FailingReader).is_err());
