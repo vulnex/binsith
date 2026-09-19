@@ -54,7 +54,7 @@ def package(root):
     windows = target.endswith('windows-msvc')
     archive = output/(name+('.zip' if windows else '.tar.gz'))
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
-    files = {executable: binary, **{n: root/n for n in ('README.md', 'CHANGELOG.md', 'RELEASE.md')}}
+    files = {executable: binary, **{n: root/n for n in ('README.md', 'CHANGELOG.md', 'RELEASE.md', 'LICENSE')}}
     files['assets/branding/binsith-logo.png'] = root/'assets/branding/binsith-logo.png'
     with tempfile.TemporaryDirectory(prefix='binsith-release-') as temp:
         build = pathlib.Path(temp)/'BUILD-INFO.json'

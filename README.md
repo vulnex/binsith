@@ -564,3 +564,9 @@ comparisons, and match/no-match exit policies keep their existing behavior. A
 validated-only export can therefore be empty while a candidate match triggers the
 configured match exit code. Validated means the implemented syntax/checksum checks
 passed, not that an indicator is malicious, reachable, or authentic.
+
+## License
+
+Copyright 2026 VULNEX - Simon Roses Femerling.
+
+BinSith is licensed under the [Apache License 2.0](LICENSE).

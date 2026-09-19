@@ -46,7 +46,7 @@ release tag; PR runs package their temporary merge commit and must not be publis
 
 The packager requires a clean checkout and a binary whose reported version,
 revision, and source fingerprint match it. It includes only the trusted binary,
-README.md, CHANGELOG.md, RELEASE.md, the selected README logo, and generated
+README.md, CHANGELOG.md, RELEASE.md, LICENSE, the selected README logo, and generated
 BUILD-INFO.json. Alternative branding concepts are excluded. It validates
 archive membership and binary digest before producing SHA256SUMS in `dist/`.
 No recursive workspace archive is used. Local `evaluations/` content must never
