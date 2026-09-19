@@ -154,7 +154,12 @@ pub fn validate(
                 context_start += 1;
             }
             let context = &value[context_start..start];
-            let prefix = context.rsplit(char::is_whitespace).next().unwrap_or("");
+            // Match the built-in URL delimiters so neighboring quoted fields
+            // cannot make an independent path look like part of a URL.
+            let prefix = context
+                .rsplit(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`'))
+                .next()
+                .unwrap_or("");
             if prefix.contains(":/") || prefix.ends_with(':') && text.starts_with("//") {
                 return result(
                     Status::Invalid,

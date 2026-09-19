@@ -1620,3 +1620,25 @@ fn release_candidate_export_keeps_v1_shape_and_validation_filters() {
     let csv = String::from_utf8(output.stdout).unwrap();
     assert_eq!(csv.lines().next().unwrap(), "\"record_type\",\"category\",\"value\",\"validation_status\",\"validation_reason\",\"observed_occurrences\",\"locations_json\",\"locations_omitted\",\"context_json\"");
 }
+
+#[test]
+fn actionable_export_keeps_path_in_separate_json_field() {
+    let output = run(
+        &[
+            "--export-indicators",
+            "-",
+            "--export-validation",
+            "actionable",
+            "--category",
+            "file_path",
+            "-",
+        ],
+        br#"{"url":"https://example.org/remote.txt","path":"/tmp/file.txt"}"#,
+    );
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = report["indicators"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["value"], "/tmp/file.txt");
+    assert_eq!(entries[0]["validation_status"], "candidate");
+}

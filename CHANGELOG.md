@@ -17,6 +17,7 @@ cross-platform production readiness.
   path-shaped URL fragments invalid as evidence of local files.
 - Stop polling exhausted regex iterators during fair retention.
 - Fix a fuzz-discovered panic when multibyte Unicode whitespace precedes a path.
+- Preserve independent path candidates in quoted fields following a URL.
 
 ### Compatibility
 
