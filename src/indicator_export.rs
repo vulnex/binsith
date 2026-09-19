@@ -442,7 +442,7 @@ mod tests {
             }
         }
         let index = Index::default();
-        let summary = crate::file_summary::summarize("fixture", b"");
+        let summary = crate::file_summary::summarize_reader("fixture", &b""[..]).unwrap();
         for format in [Format::Json, Format::Csv] {
             for fail_write in [false, true] {
                 assert!(index

@@ -19,6 +19,9 @@ jobs:
       - run: cargo +stable test --locked
       - run: cargo +stable test --release --locked
       - run: cargo +stable build --release --locked
+      - name: Folder benchmark measurement and regression gate contracts
+        if: runner.os == 'Linux'
+        run: python3 tools/test_folder_benchmarks.py
       - name: JSON and CSV standard-consumer compatibility
         if: runner.os == 'Linux'
         run: python3 tools/check_export_compatibility.py

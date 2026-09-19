@@ -12,16 +12,11 @@
 //
 
 mod comparison;
-mod coverage;
-mod entropy;
-mod file_summary;
 mod hex_dump;
 mod indicator_export;
-mod json_output;
-mod string_analysis;
 mod utils;
-mod validation;
 
+use binsith::{coverage, entropy, file_summary, json_output, scanner, string_analysis, validation};
 use clap::Parser;
 use std::io::{self, Write};
 
@@ -163,64 +158,72 @@ fn parse_positive(value: &str) -> Result<usize, String> {
         _ => Err("must be a positive integer".into()),
     }
 }
-fn limits(args: &Args) -> string_analysis::Limits {
-    string_analysis::Limits {
+fn scan_configuration(args: &Args, want_strings: bool) -> binsith::batch::AnalysisConfiguration {
+    binsith::batch::AnalysisConfiguration {
+        strings: want_strings,
+        matches_only: args.matches_only || !args.categories.is_empty(),
+        no_decode: args.no_decode,
         max_string_bytes: args.max_string_bytes,
         max_decode_bytes: args.max_decode_bytes,
+        encoding: match args.encoding.unwrap_or_default() {
+            string_analysis::Encoding::Auto => "auto",
+            string_analysis::Encoding::Utf8 => "utf8",
+            string_analysis::Encoding::Utf16le => "utf16le",
+            string_analysis::Encoding::Utf16be => "utf16be",
+        }
+        .into(),
+        scan_utf16: args.scan_utf16,
+        offset: args.offset,
+        length: args.length,
         min_length: args.min_length,
-        decode_depth: args.decode_depth as usize,
+        categories: args.categories.clone(),
+        decode_depth: args.decode_depth,
+        entropy: args.entropy,
+        entropy_window: args.entropy_window,
+        entropy_threshold: args.entropy_threshold,
     }
 }
+
 fn scan_pass(
     reader: impl io::Read,
     args: &Args,
     patterns: &[(String, regex::Regex)],
     embedded: bool,
-    mut emit: impl FnMut(string_analysis::StringFinding) -> io::Result<()>,
+    emit: impl FnMut(string_analysis::StringFinding) -> io::Result<()>,
 ) -> io::Result<()> {
-    let base = usize::try_from(args.offset)
-        .map_err(|_| io::Error::other("offset exceeds platform address range"))?;
-    let mut adjust = |mut f: string_analysis::StringFinding| {
-        let shift = |n: usize| {
-            n.checked_add(base)
-                .ok_or_else(|| io::Error::other("offset overflow"))
-        };
-        f.offset = shift(f.offset)?;
-        for detail in &mut f.match_details {
-            detail.offset = shift(detail.offset)?;
-            detail.end_offset = shift(detail.end_offset)?;
-        }
-        for layer in &mut f.decoded_layers {
-            layer.source_offset = shift(layer.source_offset)?;
-            layer.source_end_offset = shift(layer.source_end_offset)?;
-        }
-        emit(f)
-    };
-    let matching_only = args.matches_only || !args.categories.is_empty();
-    if embedded {
-        string_analysis::scan_embedded_utf16(
-            reader,
-            patterns,
-            !args.no_decode && args.max_decode_bytes > 0,
-            matching_only,
-            limits(args),
-            &mut adjust,
-        )
-    } else {
-        string_analysis::analyze_reader_with_encoding(
-            reader,
-            patterns,
-            !args.no_decode && args.max_decode_bytes > 0,
-            matching_only,
-            limits(args),
-            args.encoding.unwrap_or_default(),
-            &mut adjust,
-        )
-    }
+    scanner::string_pass(
+        reader,
+        &scan_configuration(args, true),
+        patterns,
+        embedded,
+        emit,
+    )
 }
 fn has_hit(f: &string_analysis::StringFinding) -> bool {
     f.has_actionable_match || f.decoded_layers.iter().any(|l| l.has_actionable_match)
 }
+fn analysis_metadata(
+    args: &Args,
+    want_strings: bool,
+    patterns: &[(String, regex::Regex)],
+) -> Result<serde_json::Value, serde_json::Error> {
+    use sha2::{Digest, Sha256};
+    let effective_patterns: Vec<_> = patterns
+        .iter()
+        .map(|(name, regex)| (name, regex.as_str()))
+        .collect();
+    Ok(serde_json::json!({
+        "tool": "binsith", "version": env!("CARGO_PKG_VERSION"),
+        "revision": env!("BINSITH_REVISION"), "source_sha256": env!("BINSITH_SOURCE_SHA256"),
+        "target":env!("BINSITH_TARGET"), "profile":env!("BINSITH_PROFILE"), "rustc":env!("BINSITH_RUSTC"),
+        "configuration": args, "strings_enabled":want_strings,
+        "effective_encoding":args.encoding.unwrap_or_default(),
+        "decoding_enabled":want_strings && !args.no_decode && args.max_decode_bytes > 0 && args.decode_depth > 0,
+        "patterns_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(&effective_patterns)?)),
+        "patterns_hash_format":"SHA256 of compact JSON array of sorted [name, expression] pairs after category filtering"
+    }))
+}
+
 fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     use std::io::Seek;
     if args.list_categories {
@@ -300,6 +303,58 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         patterns.retain(|(name, _)| args.categories.contains(name));
     }
     let mut input = utils::ranged_input(input_path, args.offset, args.length)?;
+    if args.quiet
+        && report_requested
+        && !args.jsonl
+        && !args.hex
+        && args.compare.is_none()
+        && args.export_indicators.is_none()
+    {
+        let mut file = if !report_stdout {
+            let parent = std::path::Path::new(args.output.as_ref().unwrap())
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."));
+            Some(tempfile::NamedTempFile::new_in(parent)?)
+        } else {
+            None
+        };
+        let metadata = analysis_metadata(&args, want_strings, &patterns)?;
+        let configuration = scan_configuration(&args, want_strings);
+        let request = scanner::ScanRequest {
+            display_path: input_path,
+            configuration: &configuration,
+            patterns: &patterns,
+            metadata: &metadata,
+        };
+        let outcome = {
+            let writer: Box<dyn Write + '_> = match file.as_mut() {
+                Some(file) => Box::new(file.as_file_mut()),
+                None => Box::new(io::stdout()),
+            };
+            scanner::scan_selected(
+                input.as_mut(),
+                writer,
+                &request,
+                &scanner::CancellationToken::default(),
+                |_| {},
+            )
+            .map_err(scanner::ScanError::into_io_error)?
+        };
+        // Keep Windows replacement semantics: close the original input first.
+        drop(input);
+        if let Some(file) = file {
+            file.persist(args.output.as_ref().unwrap())?;
+        }
+        return Ok(if outcome.has_actionable_indicators == Some(true) {
+            args.match_exit_code
+        } else if outcome.coverage.limited() {
+            args.inconclusive_exit_code
+                .unwrap_or(args.no_match_exit_code)
+        } else {
+            args.no_match_exit_code
+        });
+    }
     let terminal: Box<dyn Write> = if human {
         Box::new(io::stdout())
     } else {
@@ -379,21 +434,7 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
     } else {
         None
     };
-    use sha2::{Digest, Sha256};
-    let effective_patterns: Vec<_> = patterns
-        .iter()
-        .map(|(name, regex)| (name, regex.as_str()))
-        .collect();
-    let metadata = serde_json::json!({
-        "tool": "binsith", "version": env!("CARGO_PKG_VERSION"),
-        "revision": env!("BINSITH_REVISION"), "source_sha256": env!("BINSITH_SOURCE_SHA256"),
-        "target":env!("BINSITH_TARGET"), "profile":env!("BINSITH_PROFILE"), "rustc":env!("BINSITH_RUSTC"),
-        "configuration": &args, "strings_enabled":want_strings,
-        "effective_encoding":args.encoding.unwrap_or_default(),
-        "decoding_enabled":want_strings && !args.no_decode && args.max_decode_bytes > 0 && args.decode_depth > 0,
-        "patterns_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(&effective_patterns)?)),
-        "patterns_hash_format":"SHA256 of compact JSON array of sorted [name, expression] pairs after category filtering"
-    });
+    let metadata = analysis_metadata(&args, want_strings, &patterns)?;
     let mut coverage = coverage::Coverage::default();
     let mut matched = false;
     let mut index = comparison::Index::default();
@@ -680,3 +721,6 @@ fn main() -> std::process::ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod batch_cli_tests;

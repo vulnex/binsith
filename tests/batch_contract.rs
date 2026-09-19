@@ -119,7 +119,7 @@ fn journals_roundtrip_all_outcomes_and_accept_additive_fields() {
     }
     assert_eq!(outcomes.len(), 5);
     assert!(
-        matches!(&outcomes[0], Outcome::Complete { report } if report.has_actionable_indicators.is_none())
+        matches!(&outcomes[0], Outcome::Complete { report } if report.has_actionable_indicators == Some(false))
     );
     assert!(
         matches!(&outcomes[1], Outcome::Limited { report } if report.has_actionable_indicators == Some(true))
@@ -268,7 +268,8 @@ fn not_analyzed_is_explicit_null_not_an_absent_contract_field() {
         .nth(1)
         .unwrap();
     let mut value: Value = serde_json::from_str(line).unwrap();
-    assert!(value["outcome"]["report"]["has_actionable_indicators"].is_null());
+    value["outcome"]["report"]["has_actionable_indicators"] = Value::Null;
+    assert!(serde_json::from_value::<JournalRecord>(value.clone()).is_ok());
     value["outcome"]["report"]
         .as_object_mut()
         .unwrap()
@@ -279,4 +280,259 @@ fn not_analyzed_is_explicit_null_not_an_absent_contract_field() {
         value.as_object_mut().unwrap().remove(field);
         assert!(serde_json::from_value::<Counters>(value).is_err());
     }
+}
+
+fn interrupted_manifest() -> binsith::batch::Manifest {
+    serde_json::from_str(include_str!("fixtures/batch/manifest-interrupted.json")).unwrap()
+}
+
+#[test]
+fn manifest_fixtures_roundtrip_and_distinguish_empty_completion_from_interruption() {
+    use binsith::batch::{BatchStatus, Manifest};
+    for data in [
+        include_str!("fixtures/batch/manifest-interrupted.json"),
+        include_str!("fixtures/batch/manifest-empty.json"),
+    ] {
+        let value: Value = serde_json::from_str(data).unwrap();
+        let manifest: Manifest = serde_json::from_value(value.clone()).unwrap();
+        manifest.validate().unwrap();
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), value);
+        let mut extended = value;
+        extended["future_field"] = json!(true);
+        assert_eq!(
+            serde_json::from_value::<Manifest>(extended).unwrap(),
+            manifest
+        );
+    }
+    let mut manifest = interrupted_manifest();
+    manifest.status = BatchStatus::Complete;
+    assert!(manifest.validate().is_err());
+    manifest.discovery_complete = true;
+    manifest.discovery_finished_unix_ms = Some(1005);
+    manifest.stop_reasons.clear();
+    // Orderly completion may contain file failures or limited reports, but no cancellations.
+    manifest.counters.failed += manifest.counters.cancelled;
+    manifest.counters.cancelled = 0;
+    manifest.validate().unwrap();
+    assert_eq!(
+        ExitStatus::for_execution(&manifest.counters, true, false).code(),
+        1
+    );
+    // Wall-clock rollback is legal: elapsed_ms has its own monotonic clock.
+    manifest.finished_unix_ms = Some(0);
+    manifest.validate().unwrap();
+}
+
+#[test]
+fn manifest_rejects_false_completion_missing_fields_and_unsafe_artifact_paths() {
+    use binsith::batch::Manifest;
+    let empty: Value =
+        serde_json::from_str(include_str!("fixtures/batch/manifest-empty.json")).unwrap();
+    for (field, replacement) in [
+        ("discovery_complete", json!(false)),
+        ("finished_unix_ms", Value::Null),
+        ("elapsed_ms", Value::Null),
+        ("discovery_started_unix_ms", Value::Null),
+        ("discovery_finished_unix_ms", Value::Null),
+        ("stop_reasons", json!(["internal_error"])),
+    ] {
+        let mut value = empty.clone();
+        value[field] = replacement;
+        let parsed: Manifest = serde_json::from_value(value).unwrap();
+        assert!(parsed.validate().is_err(), "{field}");
+    }
+    for field in [
+        "schema_version",
+        "build",
+        "configuration",
+        "discovery_started_unix_ms",
+        "discovery_finished_unix_ms",
+        "finished_unix_ms",
+        "elapsed_ms",
+        "enumeration_policy",
+        "counters",
+        "artifacts",
+        "status",
+    ] {
+        let mut value = empty.clone();
+        value.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<Manifest>(value).is_err(),
+            "{field}"
+        );
+    }
+    for field in ["files", "errors", "reports"] {
+        let mut value = empty.clone();
+        value["artifacts"][field] = json!("../outside");
+        assert!(serde_json::from_value::<Manifest>(value)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+    let mut value = empty;
+    value["enumeration_policy"] = json!("future_policy");
+    assert!(serde_json::from_value::<Manifest>(value).is_err());
+}
+
+#[test]
+fn frozen_configuration_rejects_invalid_ranges_limits_and_analysis_counters() {
+    let base = interrupted_manifest();
+    let mut config = base.configuration.analysis.clone();
+    config.offset = u64::MAX;
+    config.length = Some(1);
+    assert!(config.validate().is_err());
+    for threshold in [f64::NAN, f64::INFINITY, -1.0, 8.1] {
+        let mut config = base.configuration.analysis.clone();
+        config.entropy_threshold = threshold;
+        assert!(config.validate().is_err());
+    }
+    for (field, replacement) in [
+        ("max_string_bytes", json!(3)),
+        ("min_length", json!(0)),
+        ("entropy_window", json!(0)),
+        ("decode_depth", json!(9)),
+        ("encoding", json!("unknown")),
+    ] {
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["configuration"]["analysis"][field] = replacement;
+        assert!(serde_json::from_value::<binsith::batch::Manifest>(value)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+    let mut manifest = base.clone();
+    manifest.configuration.analysis.strings = false;
+    assert!(manifest.validate().is_err());
+    let mut manifest = base.clone();
+    manifest.configuration.jobs = usize::MAX;
+    assert!(manifest.validate().is_err());
+    let mut manifest = base;
+    manifest.configuration.patterns_sha256 = "not-a-fingerprint".into();
+    assert!(manifest.validate().is_err());
+}
+
+#[test]
+fn effective_pattern_fingerprint_is_delimited_ordered_and_matches_independent_fixture() {
+    use binsith::batch::pattern_fingerprint;
+    assert_eq!(
+        pattern_fingerprint([("URL", "https?://[^ ]+")]),
+        interrupted_manifest().configuration.patterns_sha256
+    );
+    assert_ne!(
+        pattern_fingerprint([("ab", "c")]),
+        pattern_fingerprint([("a", "bc")])
+    );
+    assert_ne!(
+        pattern_fingerprint([("a", "x"), ("b", "y")]),
+        pattern_fingerprint([("b", "y"), ("a", "x")])
+    );
+}
+
+#[test]
+fn fixture_journal_outcomes_and_error_linkage_match_manifest() {
+    use std::collections::{HashMap, HashSet};
+    let manifest = interrupted_manifest();
+    let mut admissions = HashMap::new();
+    let mut terminal_ids = HashSet::new();
+    let mut observed = Counters {
+        files_with_indicators: Some(0),
+        limited_files_with_indicators: Some(0),
+        ..Default::default()
+    };
+    let error: ErrorRecord =
+        serde_json::from_str(include_str!("fixtures/batch/errors.jsonl")).unwrap();
+    let mut linked_errors = 0;
+    for (i, line) in include_str!("fixtures/batch/files.jsonl")
+        .lines()
+        .enumerate()
+    {
+        let record: JournalRecord = serde_json::from_str(line).unwrap();
+        record.validate().unwrap();
+        assert_eq!(record.sequence, i as u64 + 1);
+        assert_eq!(record.batch_id, manifest.batch_id);
+        match &record.event {
+            Event::Admission => {
+                assert!(admissions
+                    .insert(record.entry_id, record.path.clone())
+                    .is_none());
+                observed.eligible += 1;
+                observed.observed_entries += 1;
+            }
+            Event::Terminal { outcome } => {
+                assert!(
+                    terminal_ids.insert(record.entry_id),
+                    "duplicate terminal outcome"
+                );
+                if !matches!(outcome, Outcome::Skipped { .. }) {
+                    assert_eq!(
+                        admissions.remove(&record.entry_id).as_ref(),
+                        Some(&record.path)
+                    );
+                }
+                match outcome {
+                    Outcome::Complete { report } | Outcome::Limited { report } => {
+                        let hit = report
+                            .has_actionable_indicators
+                            .expect("frozen strings config")
+                            as u64;
+                        *observed.files_with_indicators.as_mut().unwrap() += hit;
+                        if matches!(outcome, Outcome::Limited { .. }) {
+                            observed.limited += 1;
+                            *observed.limited_files_with_indicators.as_mut().unwrap() += hit;
+                        } else {
+                            observed.complete += 1;
+                        }
+                    }
+                    Outcome::Failed { reason } => {
+                        observed.failed += 1;
+                        assert_eq!(error.entry_id, Some(record.entry_id));
+                        assert_eq!(error.batch_id, record.batch_id);
+                        assert_eq!(&error.code, reason);
+                        linked_errors += 1;
+                    }
+                    Outcome::Cancelled { .. } => observed.cancelled += 1,
+                    Outcome::Skipped { .. } => {
+                        observed.policy_skipped += 1;
+                        observed.observed_entries += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(admissions.is_empty());
+    assert_eq!(linked_errors, 1);
+    observed.validate().unwrap();
+    assert_eq!(observed, manifest.counters);
+}
+
+#[test]
+fn diagnostics_reject_wrong_batch_entry_and_nonterminal_links() {
+    use binsith::batch::ErrorScope;
+    let records: Vec<JournalRecord> = include_str!("fixtures/batch/files.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut error: ErrorRecord =
+        serde_json::from_str(include_str!("fixtures/batch/errors.jsonl")).unwrap();
+    error
+        .validate_link("fixture-batch", Some(&records[5]))
+        .unwrap();
+    assert!(error
+        .validate_link("other-batch", Some(&records[5]))
+        .is_err());
+    assert!(error
+        .validate_link("fixture-batch", Some(&records[4]))
+        .is_err());
+    assert!(error
+        .validate_link("fixture-batch", Some(&records[1]))
+        .is_err());
+    assert!(error.validate_link("fixture-batch", None).is_err());
+    error.code = "different_failure".into();
+    assert!(error
+        .validate_link("fixture-batch", Some(&records[5]))
+        .is_err());
+    error.scope = ErrorScope::Discovery;
+    assert!(error.validate_link("fixture-batch", None).is_err());
+    error.entry_id = None;
+    error.validate_link("fixture-batch", None).unwrap();
 }
