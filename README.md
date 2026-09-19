@@ -2,12 +2,49 @@
 
 <img src="assets/branding/binsith-logo.png" alt="BinSith Byte Monogram logo" width="420">
 
-BinSith analyzes binary data: hashes, MIME signatures, strings, indicators,
-encoded content, hex dumps, regional entropy, and differences between files.
+**BinSith is a fast, cross-platform static binary triage CLI built in Rust for
+reliable, analyst-reviewed workflows on macOS, Linux, and Windows.**
+
+Analyze hashes, MIME signatures, strings, indicators, encoded content, hex dumps,
+regional entropy, and differences between files, with JSON/CSV exports.
 It does not inspect executable headers, sections, imports, or entry points.
 
 See the [release notes](CHANGELOG.md) and [release procedure](RELEASE.md)
 for compatibility changes, packaging instructions, and promotion gates.
+
+## Performance and reliability
+
+- **Fast:** streaming analysis and configurable string/decoding limits keep large
+  inputs practical. In the local benchmark below, a 1 GiB summary took 4.20 seconds.
+- **Cross-platform:** native release downloads for macOS ARM64, Linux x86-64, and
+  Windows x86-64, with CI tests on all three operating systems.
+- **Built for reliable workflows:** debug/release tests, strict Clippy checks,
+  bounded sanitizer fuzzing, JSON/CSV compatibility checks, and extracted-binary
+  package smoke tests. Reports expose completion and coverage limits; named reports
+  replace their destination only after successful completion. Findings still require
+  analyst review.
+
+Measured with the published **0.4.2** binary on an **Apple M3 Pro, 36 GiB RAM**:
+
+| Workload | Median time | Throughput | Peak process memory |
+| --- | ---: | ---: | ---: |
+| 256 MiB summary / hashes | 0.99 s | 259 MiB/s | 2.73 MiB |
+| 256 MiB string analysis (`-s -q`) | 6.59 s | 39 MiB/s | 7.47 MiB |
+| 256 MiB live JSONL | 13.52 s | 19 MiB/s | 7.58 MiB |
+| 1 GiB summary / hashes | 4.20 s | 244 MiB/s | 2.75 MiB |
+
+These are local synthetic-input measurements from 2026-09-19: three timed runs
+following one warm-up, warm filesystem caches, and stdout discarded. They exclude
+report storage and terminal rendering. Throughput and memory vary with hardware,
+input content, enabled modes, custom patterns, and output destination; these are
+observations, not guaranteed bounds or cross-platform benchmark results.
+
+BinSith currently scans one file per invocation. Folder scans require an external
+loop or worker pool; native recursion and batch scheduling are not implemented.
+Combined analysis modes can require temporary disk space proportional to the
+selected input range. See [Resource limits](#resource-limits) and
+[Robustness and performance checks](#robustness-and-performance-checks) for limits
+and benchmark reproduction instructions.
 
 ## Download
 
