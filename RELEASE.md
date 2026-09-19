@@ -32,7 +32,16 @@ analysis. It does not replace testing your downstream application's importer.
 python3 tools/package_release.py
 ```
 
-The local packager currently supports only macOS ARM64 (`aarch64-apple-darwin`).
+The packager supports native macOS ARM64 (`aarch64-apple-darwin`), Linux x86-64
+(`x86_64-unknown-linux-gnu`), and Windows x86-64 (`x86_64-pc-windows-msvc`).
+Windows packages use ZIP; macOS and Linux packages use tar.gz. Each package is
+read back and its extracted binary is smoke-tested before checksums are written.
+
+The `Release packages` workflow builds Linux and Windows artifacts from the
+immutable `0.4.2-rc.1` source commit `653582dfb86b7578f5aae9b8940c96a154874d52`,
+using the current packaging script. It uploads CI artifacts only; publishing
+them to GitHub Releases is a separate step. Linux is built on Ubuntu 22.04.
+When preparing a new candidate, update the pinned source commit and artifact names.
 
 The packager requires a clean checkout and a binary whose reported version,
 revision, and source fingerprint match it. It includes only the trusted binary,
