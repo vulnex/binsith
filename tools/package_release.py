@@ -44,6 +44,7 @@ def main():
     archive = output/(name+'.tar.gz')
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     files = {'binsith': binary, **{n: ROOT/n for n in ('README.md', 'CHANGELOG.md', 'RELEASE.md')}}
+    files['assets/branding/binsith-logo.png'] = ROOT/'assets/branding/binsith-logo.png'
     with tempfile.TemporaryDirectory(prefix='binsith-release-') as temp:
         build = pathlib.Path(temp)/'BUILD-INFO.json'
         build.write_text(json.dumps(dict(version=version, revision=revision, target=target,

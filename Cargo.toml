@@ -2,7 +2,7 @@
 name = "binsith"
 version = "0.4.2-rc.1"
 edition = "2021"
-include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "build.rs", "README.md", "CHANGELOG.md", "RELEASE.md"]
+include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "build.rs", "README.md", "CHANGELOG.md", "RELEASE.md", "assets/branding/binsith-logo.png"]
 
 [dependencies]
 regex = "1.5"

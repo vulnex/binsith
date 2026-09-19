@@ -19,6 +19,9 @@ jobs:
       - run: cargo +stable test --locked
       - run: cargo +stable test --release --locked
       - run: cargo +stable build --release --locked
+      - name: JSON and CSV standard-consumer compatibility
+        if: runner.os == 'Linux'
+        run: python3 tools/check_export_compatibility.py
       - name: Bounded CLI stress and benchmark smoke
         if: runner.os == 'Linux'
         run: python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-smoke.json

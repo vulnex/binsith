@@ -1,5 +1,7 @@
 # BinSith
 
+<img src="assets/branding/binsith-logo.png" alt="BinSith Byte Monogram logo" width="420">
+
 BinSith analyzes binary data: hashes, MIME signatures, strings, indicators,
 encoded content, hex dumps, regional entropy, and differences between files.
 It does not inspect executable headers, sections, imports, or entry points.

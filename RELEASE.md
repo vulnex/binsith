@@ -14,12 +14,17 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 cargo test --release --locked
 cargo build --release --locked
+python3 tools/check_export_compatibility.py
 python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-rc.json
 ```
 
 Run the bounded AddressSanitizer campaign documented in fuzz/README.md using only
 curated synthetic seeds. Never run malware samples as executables, scripts, or
 loaded libraries. Static corpus evaluation is separate and remains local.
+
+The export check compares JSON with CSV parsed by Python's standard libraries,
+including quoted Unicode values, empty exports, validation filters, and limited
+analysis. It does not replace testing your downstream application's importer.
 
 ## Package
 
@@ -31,7 +36,8 @@ The local packager currently supports only macOS ARM64 (`aarch64-apple-darwin`).
 
 The packager requires a clean checkout and a binary whose reported version,
 revision, and source fingerprint match it. It includes only the trusted binary,
-README.md, CHANGELOG.md, RELEASE.md, and generated BUILD-INFO.json. It validates
+README.md, CHANGELOG.md, RELEASE.md, the selected README logo, and generated
+BUILD-INFO.json. Alternative branding concepts are excluded. It validates
 archive membership and binary digest before producing SHA256SUMS in `dist/`.
 No recursive workspace archive is used. Local `evaluations/` content must never
 be added to a release, source package, or public issue.

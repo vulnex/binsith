@@ -36,6 +36,8 @@ cross-platform production readiness.
 
 ### Release engineering
 
+- Adopt the Byte Monogram logo; preserve alternative branding concepts in source.
+- Check JSON/CSV parity with independent standard-library parsers in CI.
 - Strict Clippy checks in CI; one documented internal argument-count exception.
 - Restore fuzz harness dependency alignment for the new checksum validator.
 - Exclude local malware-derived evaluations from Git and source/binary packages.
