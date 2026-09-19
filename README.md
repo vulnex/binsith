@@ -9,6 +9,90 @@ It does not inspect executable headers, sections, imports, or entry points.
 See the [release notes](CHANGELOG.md) and [release procedure](RELEASE.md)
 for compatibility changes, packaging instructions, and promotion gates.
 
+## Download
+
+[Download the latest release](https://github.com/vulnex/binsith/releases/latest).
+The repository is currently private; sign in with a GitHub account that has access.
+Download the archive for your platform and `SHA256SUMS` from the same release.
+
+| Platform | 0.4.2 archive |
+| --- | --- |
+| macOS, Apple Silicon (ARM64) | `binsith-0.4.2-aarch64-apple-darwin.tar.gz` |
+| Linux, x86-64 (built on Ubuntu 22.04) | `binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows, x86-64 | `binsith-0.4.2-x86_64-pc-windows-msvc.zip` |
+
+Run these commands in the folder containing your download. Compare the hash with
+its filename's entry in `SHA256SUMS` before extracting. Archives are unsigned;
+checksums detect corruption, not publisher authenticity.
+
+**macOS (Apple Silicon)**
+
+```sh
+shasum -a 256 binsith-0.4.2-aarch64-apple-darwin.tar.gz
+tar -xzf binsith-0.4.2-aarch64-apple-darwin.tar.gz
+cd binsith-0.4.2-aarch64-apple-darwin
+./binsith --version
+```
+
+**Linux (x86-64)**
+
+```sh
+sha256sum binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz
+cd binsith-0.4.2-x86_64-unknown-linux-gnu
+./binsith --version
+```
+
+**Windows (PowerShell, x86-64)**
+
+```powershell
+Get-FileHash .\binsith-0.4.2-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Expand-Archive .\binsith-0.4.2-x86_64-pc-windows-msvc.zip -DestinationPath .
+Set-Location .\binsith-0.4.2-x86_64-pc-windows-msvc
+.\binsith.exe --version
+```
+
+These examples use 0.4.2 filenames. For a newer release, substitute the filenames
+shown on its release page. To build locally, see [Build and verify](#build-and-verify).
+
+## Quickstart: analyze synthetic input
+
+From the extracted package directory, create a small text file and export its
+indicators. The input contains only example addresses; BinSith reads it as data
+and does not contact the addresses.
+
+**macOS / Linux**
+
+```sh
+printf 'https://example.org/download\n192.0.2.10\n' > sample.txt
+./binsith sample.txt --category URL,ip_address --export-indicators indicators.json --quiet
+cat indicators.json
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Set-Content -Path sample.txt -Value @('https://example.org/download', '192.0.2.10') -Encoding ascii
+.\binsith.exe sample.txt --category URL,ip_address --export-indicators indicators.json --quiet
+Get-Content indicators.json
+```
+
+Expect two entries in `indicators`:
+
+| Category | Value | Validation status |
+| --- | --- | --- |
+| `URL` | `https://example.org/download` | `validated` |
+| `ip_address` | `192.0.2.10` | `validated` |
+
+The report also includes `context.processing_complete: true`, source locations,
+coverage information, and build metadata. Here, `validated` means the local
+syntax check passed; it does not mean an address is reachable or malicious.
+
+For CSV, replace `--export-indicators indicators.json` with
+`--export-indicators indicators.csv --export-format csv`. CSV includes two
+indicator rows followed by a context row; parse it with a CSV parser.
+See [Indicator export](#indicator-export-040) for the full format.
+
 ## Build and verify
 
 ```sh
