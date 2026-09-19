@@ -1,6 +1,6 @@
-# Release candidate procedure
+# Release procedure
 
-The current candidate is `0.4.2-rc.1`. Its supported role is static triage with
+The current version is `0.4.2`. Its supported role is static triage with
 analyst review. See CHANGELOG.md for consumer-visible behavior changes.
 
 ## Local verification
@@ -38,10 +38,11 @@ Windows packages use ZIP; macOS and Linux packages use tar.gz. Each package is
 read back and its extracted binary is smoke-tested before checksums are written.
 
 The `Release packages` workflow builds Linux and Windows artifacts from the
-immutable `0.4.2-rc.1` source commit `653582dfb86b7578f5aae9b8940c96a154874d52`,
-using the current packaging script. It uploads CI artifacts only; publishing
+immutable workflow commit (`github.sha`), using the packaging script from that
+same commit. It uploads CI artifacts only; publishing
 them to GitHub Releases is a separate step. Linux is built on Ubuntu 22.04.
-When preparing a new candidate, update the pinned source commit and artifact names.
+For publication, use the successful post-merge run whose commit matches the
+release tag; PR runs package their temporary merge commit and must not be published.
 
 The packager requires a clean checkout and a binary whose reported version,
 revision, and source fingerprint match it. It includes only the trusted binary,
@@ -59,7 +60,10 @@ publisher authenticity. This procedure does not claim reproducible compilation.
 1. Run the configured Linux, macOS, and Windows CI matrix on the final candidate
    commit, including strict Clippy, debug/release tests, and release builds.
 2. Pass the Linux sanitizer fuzz job and bounded stress job on that commit.
-3. Exercise downstream JSON/CSV consumers with the candidate. Additive fields
+3. Exercise downstream JSON/CSV consumers when an application is in scope.
+   For 0.4.2, the project owner confirmed no downstream application is in scope;
+   application-specific testing is not applicable. Standard-parser checks remain
+   required. Future integrations must qualify their importers. Additive fields
    retain schema version 1, but stricter validation can alter filtered results and
    match exit codes. Review omissions when analysis or export is limited.
 4. Accept the documented evidence/context overhead, or benchmark representative
@@ -68,6 +72,5 @@ publisher authenticity. This procedure does not claim reproducible compilation.
    the candidate with its release notes. Do not describe untested platforms as
    verified or promote to a final version before the above gates pass.
 
-A Git remote is required to run hosted CI and publish a candidate. Local successful
-checks do not substitute for the other operating systems. The initial preparation
-checkout had no remote configured; no publication is implied by a local artifact.
+A Git remote is required to run hosted CI and publish a release. Local successful
+checks do not substitute for the other operating systems.
