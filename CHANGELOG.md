@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 — 2026-09-19
+
+- Promote RC1 analysis behavior to the final release for analyst-reviewed static triage.
+- Provide native macOS ARM64, Linux x86-64, and Windows x86-64 packages with
+  embedded build identity, extracted-binary smoke checks, and SHA-256 checksums.
+- Build release packages from the workflow commit so their revision matches the
+  versioned source, including the Windows source-fingerprint ordering fix.
+- No downstream application is currently in scope; standard JSON/CSV parser
+  compatibility is verified, while future integrations must qualify their importers.
+- Evidence/context overhead documented below remains an accepted tradeoff.
+  Artifacts remain unsigned; URL findings still require analyst review.
+
 ## 0.4.2-rc.1 — 2026-09-16
 
 Release candidate for analyst-reviewed static triage. This is not a declaration of
