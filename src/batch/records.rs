@@ -15,7 +15,7 @@ use super::RelativePath;
 use serde::{Deserialize, Serialize};
 
 // Unlike serde's default Option handling, require the key while accepting null.
-fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(super) fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
@@ -128,6 +128,44 @@ pub struct ErrorRecord {
     pub stage: String,
     pub code: String,
     pub message: String,
+}
+
+impl ErrorRecord {
+    /// Check a diagnostic against its batch and, for file scope, its terminal
+    /// journal record. This does not increment outcome counters a second time.
+    pub fn validate_link(
+        &self,
+        batch_id: &str,
+        terminal: Option<&JournalRecord>,
+    ) -> Result<(), &'static str> {
+        if self.batch_id.is_empty()
+            || self.batch_id != batch_id
+            || self.stage.is_empty()
+            || self.code.is_empty()
+            || self.message.is_empty()
+        {
+            return Err("invalid diagnostic identity or required fields");
+        }
+        match (&self.scope, terminal) {
+            (ErrorScope::File, Some(record)) => {
+                record.validate()?;
+                if record.batch_id != self.batch_id || self.entry_id != Some(record.entry_id) {
+                    return Err("diagnostic refers to a different batch or entry");
+                }
+                match &record.event {
+                    Event::Terminal {
+                        outcome: Outcome::Failed { reason },
+                    } if reason == &self.code => Ok(()),
+                    Event::Terminal {
+                        outcome: Outcome::Limited { .. },
+                    } => Ok(()),
+                    _ => Err("file diagnostic requires a corresponding failed or limited outcome"),
+                }
+            }
+            (ErrorScope::Discovery | ErrorScope::Batch, None) if self.entry_id.is_none() => Ok(()),
+            _ => Err("diagnostic scope and entry linkage disagree"),
+        }
+    }
 }
 
 /// A coherent checkpoint, not a counter of arbitrary filesystem lookups.

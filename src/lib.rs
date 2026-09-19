@@ -11,5 +11,13 @@
 // https://www.vulnex.com
 //
 
-//! Reusable contracts for native folder scanning, under development.
+//! Shared scanning primitives and native folder contracts, under development.
 pub mod batch;
+
+pub mod coverage;
+pub mod entropy;
+pub mod file_summary;
+pub mod json_output;
+pub mod scanner;
+pub mod string_analysis;
+pub mod validation;

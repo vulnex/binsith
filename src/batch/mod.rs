@@ -12,7 +12,11 @@
 //
 
 //! Batch artifact contracts. Execution and CLI integration are not yet available.
+pub mod cli;
+mod manifest;
 mod path;
+pub mod preflight;
 mod records;
+pub use manifest::*;
 pub use path::RelativePath;
 pub use records::*;
