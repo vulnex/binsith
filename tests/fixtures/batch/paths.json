@@ -1,0 +1,34 @@
+[
+  {
+    "path": {
+      "encoding": "unix-bytes-base64",
+      "value": "bmVzdGVkL3NhbXBsZS5iaW4="
+    },
+    "report_id": "9bf966a78a7802eafd53eda7832088017c7eb3a009125653781219b68e7aea48",
+    "location": "results/9b/9bf966a78a7802eafd53eda7832088017c7eb3a009125653781219b68e7aea48.json"
+  },
+  {
+    "path": {
+      "encoding": "unix-bytes-base64",
+      "value": "bm9uLXV0Zjgt/y5iaW4="
+    },
+    "report_id": "9a1b55126002f23a6a1cb84c7d4d83434eb86bbb397ee2bd7be79e5ddf3bd08d",
+    "location": "results/9a/9a1b55126002f23a6a1cb84c7d4d83434eb86bbb397ee2bd7be79e5ddf3bd08d.json"
+  },
+  {
+    "path": {
+      "encoding": "windows-utf16le-base64",
+      "value": "bgBlAHMAdABlAGQAXABzAGEAbQBwAGwAZQAuAGIAaQBuAA=="
+    },
+    "report_id": "5f4cea24ae9b74d1bad3aefe08ba2ae1db207378b8a4d58e8c9734e6f288c53b",
+    "location": "results/5f/5f4cea24ae9b74d1bad3aefe08ba2ae1db207378b8a4d58e8c9734e6f288c53b.json"
+  },
+  {
+    "path": {
+      "encoding": "windows-utf16le-base64",
+      "value": "ANguAGIAaQBuAA=="
+    },
+    "report_id": "68a4b5916034f327ffe978fd9f86363ae351dd933247f862e4e93e1d3050121a",
+    "location": "results/68/68a4b5916034f327ffe978fd9f86363ae351dd933247f862e4e93e1d3050121a.json"
+  }
+]
