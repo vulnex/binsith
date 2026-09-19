@@ -59,6 +59,42 @@ impl<W: Write> JsonWriter<W> {
             live: false,
         })
     }
+    /// Ordinary JSON with strings first, allowing summary accumulation while
+    /// scanning. Call finish_with_summary only after successful input exhaustion.
+    pub(crate) fn strings_first(mut out: W) -> io::Result<Self> {
+        write!(out, "{{\"schema_version\":1,\"strings\":[")?;
+        Ok(Self {
+            out,
+            first: true,
+            strings_open: true,
+            entropy_open: false,
+            jsonl: false,
+            live: false,
+        })
+    }
+
+    pub(crate) fn finish_with_summary(
+        mut self,
+        summary: &FileSummary,
+        offset: u64,
+        requested_length: Option<u64>,
+        metadata: &serde_json::Value,
+        coverage: &serde_json::Value,
+    ) -> io::Result<()> {
+        self.close_arrays()?;
+        write!(self.out, ",\"file_summary\":")?;
+        serde_json::to_writer(&mut self.out, summary)?;
+        write!(self.out, ",\"scan_range\":")?;
+        serde_json::to_writer(
+            &mut self.out,
+            &serde_json::json!({
+                "offset": offset, "length": summary.size_bytes,
+                "requested_length": requested_length,
+            }),
+        )?;
+        self.finish_report(metadata, coverage)
+    }
+
     pub fn live(out: W) -> io::Result<Self> {
         let mut writer = Self {
             out,

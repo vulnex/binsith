@@ -64,23 +64,39 @@ pub struct MatchDetail {
 const MAX_MATCH_DETAILS: usize = 1000;
 const MAX_MATCH_TEXT_BYTES: usize = 1024 * 1024;
 
-fn locate_matches(
-    value: &str,
-    offset: usize,
-    encoding: &str,
-    patterns: &[(String, Regex)],
-) -> (
+/// Safe boundaries between bounded analysis operations. A checkpoint cannot
+/// interrupt a single regex search, decoder call, or blocked OS read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Checkpoint {
+    Extraction,
+    Matching,
+    Decode,
+}
+
+type MatchResults = (
     Vec<String>,
     Vec<MatchDetail>,
     bool,
     bool,
     std::collections::BTreeMap<String, usize>,
-) {
+);
+
+fn locate_matches(
+    value: &str,
+    offset: usize,
+    encoding: &str,
+    patterns: &[(String, Regex)],
+    checkpoint: &impl Fn(Checkpoint) -> std::io::Result<()>,
+) -> std::io::Result<MatchResults> {
+    checkpoint(Checkpoint::Matching)?;
     // Regex offsets refer to UTF-8 text; UTF-16 requires original-byte boundaries.
     let boundaries = if encoding.starts_with("UTF-16") {
         let mut map = vec![0; value.len() + 1];
         let mut bytes = 0;
         for (index, c) in value.char_indices() {
+            if index % 4096 == 0 {
+                checkpoint(Checkpoint::Matching)?;
+            }
             map[index] = bytes;
             bytes += c.len_utf16() * 2;
             map[index + c.len_utf8()] = bytes;
@@ -109,8 +125,10 @@ fn locate_matches(
             if exhausted[index] {
                 continue;
             }
+            checkpoint(Checkpoint::Matching)?;
             let mut yielded = false;
             for matched in iterators[index].by_ref() {
+                checkpoint(Checkpoint::Matching)?;
                 let end = crate::validation::match_end(
                     name,
                     regex,
@@ -162,7 +180,8 @@ fn locate_matches(
         .collect();
     categories.sort_by_key(|name| order[name.as_str()]);
     details.sort_by_key(|detail| (order[detail.pattern.as_str()], detail.offset));
-    (categories, details, omitted, actionable, omitted_counts)
+    checkpoint(Checkpoint::Matching)?;
+    Ok((categories, details, omitted, actionable, omitted_counts))
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, clap::ValueEnum)]
@@ -256,6 +275,7 @@ fn decode_text(text: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_run(
     run: &mut Run,
     offset: usize,
@@ -264,7 +284,8 @@ fn finish_run(
     decode: bool,
     only_matches: bool,
     limits: Limits,
-) -> Option<StringFinding> {
+    checkpoint: &impl Fn(Checkpoint) -> std::io::Result<()>,
+) -> std::io::Result<Option<StringFinding>> {
     let Run {
         value,
         length,
@@ -272,8 +293,11 @@ fn finish_run(
         ascii,
     } = std::mem::take(run);
     if length < limits.min_length {
-        return None;
+        return Ok(None);
     }
+    // Empty/short embedded candidates occur at nearly every byte. Periodic
+    // extraction checkpoints cover them without an atomic load per candidate.
+    checkpoint(Checkpoint::Extraction)?;
     // Do not run regexes against a prefix: anchors could produce false matches.
     let (
         matches,
@@ -284,7 +308,7 @@ fn finish_run(
     ) = if truncated {
         (Vec::new(), Vec::new(), false, false, Default::default())
     } else {
-        locate_matches(&value, offset, encoding, patterns)
+        locate_matches(&value, offset, encoding, patterns, checkpoint)?
     };
     let mut decoded = None;
     let mut decoded_layers = Vec::new();
@@ -296,25 +320,32 @@ fn finish_run(
         "not_utf8_base64"
     };
     if decode && limits.decode_depth > 0 && !truncated {
+        checkpoint(Checkpoint::Decode)?;
         // Token matching does not cross punctuation or padding. One shared byte
         // budget and a candidate cap bound all chains in an extracted run.
         static TOKENS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
         let tokens = TOKENS.get_or_init(|| Regex::new(r"[A-Za-z0-9+/]+={0,2}").unwrap());
-        let candidates: Vec<_> = if base64_shape(&value) {
+        let candidates = if base64_shape(&value) {
             vec![(0, value.len())]
         } else {
-            tokens
-                .find_iter(&value)
-                .filter(|m| m.len() >= 8 && base64_shape(m.as_str()))
-                .take(129)
-                .map(|m| (m.start(), m.end()))
-                .collect()
+            let mut candidates = Vec::new();
+            for matched in tokens.find_iter(&value) {
+                checkpoint(Checkpoint::Decode)?;
+                if matched.len() >= 8 && base64_shape(matched.as_str()) {
+                    candidates.push((matched.start(), matched.end()));
+                    if candidates.len() == 129 {
+                        break;
+                    }
+                }
+            }
+            candidates
         };
         if candidates.len() > 128 {
             decode_status = "limit";
         }
         let mut used = 0usize;
         for (start, end) in candidates.into_iter().take(128) {
+            checkpoint(Checkpoint::Decode)?;
             let candidate = &value[start..end];
             if decoded_size(candidate) > limits.max_decode_bytes.saturating_sub(used) {
                 decode_status = "limit";
@@ -323,6 +354,7 @@ fn finish_run(
             let Some(mut text) = decode_text(candidate) else {
                 continue;
             };
+            checkpoint(Checkpoint::Decode)?;
             used += text.len();
             if decoded.is_none() {
                 decoded = Some(text.clone());
@@ -339,8 +371,9 @@ fn finish_run(
                     }
             };
             for depth in 1..=limits.decode_depth.min(8) {
+                checkpoint(Checkpoint::Decode)?;
                 let (categories, details, omitted, actionable, omitted_counts) =
-                    locate_matches(&text, 0, "UTF-8", patterns);
+                    locate_matches(&text, 0, "UTF-8", patterns, checkpoint)?;
                 let (next, state) = if !base64_shape(&text) {
                     (None, "not_utf8_base64")
                 } else if depth == limits.decode_depth.min(8) {
@@ -353,6 +386,7 @@ fn finish_run(
                         None => (None, "not_utf8_base64"),
                     }
                 };
+                checkpoint(Checkpoint::Decode)?;
                 decoded_layers.push(DecodedLayer {
                     depth,
                     encoding: "base64",
@@ -388,9 +422,9 @@ fn finish_run(
             l.match_details_truncated || matches!(l.next_decode, "byte_limit" | "depth_limit")
         })
     {
-        return None;
+        return Ok(None);
     }
-    Some(StringFinding {
+    Ok(Some(StringFinding {
         offset,
         encoding: if encoding == "UTF-8" && ascii {
             "ASCII"
@@ -409,7 +443,7 @@ fn finish_run(
         decoded_layers,
         truncated,
         decode_status,
-    })
+    }))
 }
 
 /// Streams findings as runs end, retaining at most the configured prefix.
@@ -420,7 +454,30 @@ pub fn analyze_reader_with_encoding(
     only_matches: bool,
     limits: Limits,
     selected: Encoding,
+    emit: impl FnMut(StringFinding) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    analyze_reader_with_encoding_checked(
+        reader,
+        patterns,
+        decode,
+        only_matches,
+        limits,
+        selected,
+        emit,
+        &|_| Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn analyze_reader_with_encoding_checked(
+    reader: impl std::io::Read,
+    patterns: &[(String, Regex)],
+    decode: bool,
+    only_matches: bool,
+    limits: Limits,
+    selected: Encoding,
     mut emit: impl FnMut(StringFinding) -> std::io::Result<()>,
+    checkpoint: &impl Fn(Checkpoint) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::{BufReader, Read};
     let mut bytes = BufReader::with_capacity(65536, reader).bytes();
@@ -463,7 +520,8 @@ pub fn analyze_reader_with_encoding(
             decode,
             only_matches,
             limits,
-        ) {
+            checkpoint,
+        )? {
             emit(finding)?;
         }
         Ok(())
@@ -473,6 +531,9 @@ pub fn analyze_reader_with_encoding(
         let mut offset = if skip_bom { 2 } else { 0 };
         let mut pending = None;
         loop {
+            if offset % 4096 == 0 {
+                checkpoint(Checkpoint::Extraction)?;
+            }
             let (unit, position) = if let Some(unit) = pending.take() {
                 unit
             } else {
@@ -530,6 +591,9 @@ pub fn analyze_reader_with_encoding(
         let mut sequence = Vec::with_capacity(4);
         let mut sequence_start = 0;
         for (offset, byte) in bytes.enumerate() {
+            if offset % 4096 == 0 {
+                checkpoint(Checkpoint::Extraction)?;
+            }
             let byte = byte?;
             if sequence.is_empty() {
                 sequence_start = offset;
@@ -577,13 +641,37 @@ pub fn scan_embedded_utf16(
     decode: bool,
     only_matches: bool,
     limits: Limits,
+    emit: impl FnMut(StringFinding) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    scan_embedded_utf16_checked(
+        reader,
+        patterns,
+        decode,
+        only_matches,
+        limits,
+        emit,
+        &|_| Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scan_embedded_utf16_checked(
+    reader: impl std::io::Read,
+    patterns: &[(String, Regex)],
+    decode: bool,
+    only_matches: bool,
+    limits: Limits,
     mut emit: impl FnMut(StringFinding) -> std::io::Result<()>,
+    checkpoint: &impl Fn(Checkpoint) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::{BufReader, Read};
     let mut runs: [Run; 4] = std::array::from_fn(|_| Run::default());
     let mut starts = [0usize; 4];
     let mut previous = None;
     for (position, byte) in BufReader::with_capacity(65536, reader).bytes().enumerate() {
+        if position % 4096 == 0 {
+            checkpoint(Checkpoint::Extraction)?;
+        }
         let byte = byte?;
         if let Some(first) = previous {
             let start = position - 1;
@@ -602,17 +690,20 @@ pub fn scan_embedded_utf16(
                         char::from_u32(unit as u32).unwrap(),
                         limits.max_string_bytes,
                     );
-                } else if let Some(mut finding) = finish_run(
-                    &mut runs[index],
-                    starts[index],
-                    if little { "UTF-16LE" } else { "UTF-16BE" },
-                    patterns,
-                    decode,
-                    only_matches,
-                    limits,
-                ) {
-                    finding.extraction = "embedded_utf16_candidate";
-                    emit(finding)?;
+                } else if !runs[index].is_empty() || limits.min_length == 0 {
+                    if let Some(mut finding) = finish_run(
+                        &mut runs[index],
+                        starts[index],
+                        if little { "UTF-16LE" } else { "UTF-16BE" },
+                        patterns,
+                        decode,
+                        only_matches,
+                        limits,
+                        checkpoint,
+                    )? {
+                        finding.extraction = "embedded_utf16_candidate";
+                        emit(finding)?;
+                    }
                 }
             }
         }
@@ -627,7 +718,8 @@ pub fn scan_embedded_utf16(
             decode,
             only_matches,
             limits,
-        ) {
+            checkpoint,
+        )? {
             finding.extraction = "embedded_utf16_candidate";
             emit(finding)?;
         }
@@ -968,7 +1060,8 @@ mod tests {
             ("first".into(), Regex::new("^a+$").unwrap()),
             ("second".into(), Regex::new("^a+$").unwrap()),
         ];
-        let (_, details, omitted, _, _) = locate_matches(&text, 0, "UTF-8", &patterns);
+        let (_, details, omitted, _, _) =
+            locate_matches(&text, 0, "UTF-8", &patterns, &|_| Ok(())).unwrap();
         assert_eq!(details.len(), 1);
         assert!(omitted);
     }
@@ -1283,7 +1376,8 @@ mod fairness_tests {
             ("file_path".into(), Regex::new("a").unwrap()),
             ("ip_address".into(), Regex::new("192\\.0\\.2\\.1").unwrap()),
         ];
-        let (_, details, omitted, _, counts) = locate_matches(&text, 0, "UTF-8", &patterns);
+        let (_, details, omitted, _, counts) =
+            locate_matches(&text, 0, "UTF-8", &patterns, &|_| Ok(())).unwrap();
         assert_eq!(details.len(), 1000);
         assert!(details.iter().any(|d| d.text == "192.0.2.1"));
         assert!(omitted);
@@ -1294,7 +1388,8 @@ mod fairness_tests {
     fn ambiguous_url_keeps_original_bytes_and_context() {
         let patterns = load_patterns(None).unwrap();
         let text = "before https://example.com/cert.crt0E after";
-        let (_, details, _, _, _) = locate_matches(text, 0, "UTF-8", &patterns);
+        let (_, details, _, _, _) =
+            locate_matches(text, 0, "UTF-8", &patterns, &|_| Ok(())).unwrap();
         let d = details.iter().find(|d| d.pattern == "URL").unwrap();
         assert_eq!(d.text, "https://example.com/cert.crt0E");
         assert_eq!(&text[d.offset..d.end_offset], d.text);
