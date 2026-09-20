@@ -29,6 +29,11 @@ pub(super) struct Snapshot {
     changed: Option<(i64, i64)>,
 }
 impl Snapshot {
+    pub(super) fn same_data(&self, other: &Self) -> bool {
+        self.identity == other.identity
+            && self.size == other.size
+            && self.modified == other.modified
+    }
     pub(super) fn same_identity(&self, other: &Self) -> bool {
         self.identity == other.identity
     }

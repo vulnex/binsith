@@ -78,7 +78,7 @@ fn native_path(bytes: Vec<u8>) -> io::Result<PathBuf> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStringExt;
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "invalid queued path",

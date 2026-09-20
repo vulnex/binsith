@@ -74,7 +74,7 @@ pub fn classify_input(input: Option<&Path>, list_categories: bool) -> io::Result
 /// Walk components before canonicalizing so a link followed by `..` cannot hide
 /// an explicitly supplied linked component. The process cwd is the implicit base;
 /// its canonical spelling avoids rejecting OS aliases outside the supplied path.
-fn directory_path(path: &Path, allow_missing: bool) -> io::Result<PathBuf> {
+pub(super) fn directory_path(path: &Path, allow_missing: bool) -> io::Result<PathBuf> {
     if path.as_os_str().is_empty() {
         return Err(invalid("empty root path"));
     }
