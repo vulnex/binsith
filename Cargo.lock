@@ -76,12 +76,14 @@ dependencies = [
  "infer",
  "md5",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "toml",
  "url",
+ "windows-sys",
 ]
 
 [[package]]
