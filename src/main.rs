@@ -17,7 +17,7 @@ mod indicator_export;
 mod utils;
 
 use binsith::{coverage, entropy, file_summary, json_output, scanner, string_analysis, validation};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use std::io::{self, Write};
 
 #[derive(Parser, serde::Serialize)]
@@ -28,9 +28,12 @@ use std::io::{self, Write};
     about = "VULNEX BinSith, a binary analysis tool"
 )]
 struct Args {
-    /// Input file, or - for standard input
+    #[command(flatten)]
+    #[serde(skip)]
+    folder: binsith::batch::cli::FolderOptions,
+    /// Input file or directory, or - for standard input
     #[arg(required_unless_present = "list_categories")]
-    file: Option<String>,
+    file: Option<std::path::PathBuf>,
     /// List available bundled/custom pattern categories without reading a sample
     #[arg(long, conflicts_with_all = ["file", "summary", "strings", "matches_only", "hex", "no_decode", "output", "max_string_bytes", "max_decode_bytes", "encoding", "scan_utf16", "offset", "length", "min_length", "categories", "decode_depth", "entropy", "entropy_window", "entropy_threshold", "jsonl", "live_jsonl", "export_indicators", "export_format", "export_validation", "quiet", "match_exit_code", "no_match_exit_code", "inconclusive_exit_code", "compare"])]
     list_categories: bool,
@@ -235,7 +238,12 @@ fn run(mut args: Args) -> Result<u8, Box<dyn std::error::Error>> {
         stdout.flush()?;
         return Ok(0);
     }
-    let input_path = args.file.as_deref().ok_or("input file is required")?;
+    let input_path = args
+        .file
+        .as_deref()
+        .ok_or("input file is required")?
+        .to_str()
+        .ok_or("single-file input path must be UTF-8")?;
     if args.live_jsonl {
         args.jsonl = true;
     }
@@ -706,8 +714,82 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
     Ok(())
 }
 
+fn folder_run(batch: binsith::batch::preflight::FrozenBatch) -> u8 {
+    use binsith::{batch::execution, scanner::CancellationToken};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let cancellation = CancellationToken::default();
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let signal = interrupted.clone();
+    let token = cancellation.clone();
+    if let Err(error) = ctrlc::set_handler(move || {
+        if signal.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+        token.cancel();
+    }) {
+        eprintln!("binsith: cannot install interrupt handler: {error}");
+        return 2;
+    }
+    match execution::run(&batch, cancellation) {
+        Ok(result) => {
+            if batch.folder().human_summary {
+                eprintln!("Batch: {} complete, {} limited, {} failed, {} skipped, {} cancelled; {} discovery errors",
+                    result.counters.complete, result.counters.limited, result.counters.failed,
+                    result.counters.policy_skipped, result.counters.cancelled, result.counters.discovery_errors);
+            }
+            if interrupted.load(Ordering::SeqCst) {
+                130
+            } else {
+                result.status.code()
+            }
+        }
+        Err(error) => {
+            eprintln!("binsith: {}", utils::escape_string(&error.message));
+            if interrupted.load(Ordering::SeqCst) {
+                130
+            } else {
+                error.status.code()
+            }
+        }
+    }
+}
+
 fn main() -> std::process::ExitCode {
-    match run(Args::parse()) {
+    use std::io::IsTerminal;
+    let matches = Args::command().get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    match binsith::batch::preflight::inspect(
+        &args.folder,
+        &matches,
+        args.file.as_deref(),
+        std::thread::available_parallelism().map_or(1, usize::from),
+        io::stderr().is_terminal(),
+    ) {
+        Ok(Some(batch)) => return std::process::ExitCode::from(folder_run(batch)),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("binsith: {}", utils::escape_string(&e.to_string()));
+            let folder_requested = ["recursive", "jobs", "output_dir", "progress", "fail_fast"]
+                .iter()
+                .any(|id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine));
+            // Preserve the existing missing/unreadable single-file exit status.
+            let code = if !folder_requested
+                && args
+                    .file
+                    .as_ref()
+                    .is_some_and(|p| std::fs::metadata(p).is_err())
+            {
+                1
+            } else {
+                2
+            };
+            return std::process::ExitCode::from(code);
+        }
+    }
+    match run(args) {
         Ok(code) => std::process::ExitCode::from(code),
         Err(e)
             if e.downcast_ref::<io::Error>()

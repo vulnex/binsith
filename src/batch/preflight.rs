@@ -213,7 +213,7 @@ impl FrozenBatch {
 /// Concrete FS-08 preflight. Detect the mode using metadata only, reuse the real
 /// option contract and pattern loader, then resolve native filesystem roots.
 /// A single-file/stdin/category-listing request returns None without pattern I/O.
-/// The public CLI will call this once execution is integrated in FS-12.
+/// Called by the public CLI before claiming output or starting folder execution.
 pub fn inspect(
     folder: &FolderOptions,
     matches: &ArgMatches,
@@ -296,4 +296,48 @@ pub fn analysis_configuration(matches: &ArgMatches) -> Result<AnalysisConfigurat
     };
     config.validate()?;
     Ok(config)
+}
+
+#[cfg(test)]
+pub(super) fn storage_fixture(input: &Path, output: &Path) -> FrozenBatch {
+    let manifest: super::Manifest = serde_json::from_str(include_str!(
+        "../../tests/fixtures/batch/manifest-empty.json"
+    ))
+    .unwrap();
+    let mut configuration = manifest.configuration;
+    configuration.jobs = 1;
+    configuration.work_queue_capacity = 2;
+    configuration.analysis.entropy = true; // Exercises private snapshot storage too.
+    let patterns = crate::string_analysis::load_patterns(None).unwrap();
+    configuration.patterns_sha256 =
+        pattern_fingerprint(patterns.iter().map(|(n, r)| (n.as_str(), r.as_str())));
+    FrozenBatch {
+        roots: super::roots::resolve_roots(input, output).unwrap(),
+        validated: ValidatedConfiguration {
+            folder: FolderConfiguration {
+                recursive: false,
+                jobs: 1,
+                work_queue_capacity: 2,
+                output_dir: output.into(),
+                fail_fast: false,
+                progress: super::cli::ProgressMode::Disabled,
+                human_summary: false,
+            },
+            configuration,
+            patterns,
+        },
+    }
+}
+
+#[cfg(test)]
+impl FrozenBatch {
+    pub(super) fn test_jobs(&mut self, jobs: usize) {
+        self.validated.configuration.jobs = jobs;
+        self.validated.configuration.work_queue_capacity = jobs.checked_mul(2).unwrap();
+        self.validated.folder.jobs = jobs;
+        self.validated.folder.work_queue_capacity = jobs * 2;
+    }
+    pub(super) fn test_offset(&mut self, offset: u64) {
+        self.validated.configuration.analysis.offset = offset;
+    }
 }

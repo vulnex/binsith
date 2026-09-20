@@ -30,14 +30,35 @@ use std::{
     },
 };
 
+#[derive(Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    parent: Option<Arc<CancellationState>>,
+}
 #[derive(Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<CancellationState>);
 impl CancellationToken {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.cancelled.store(true, Ordering::Relaxed);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        let mut state = self.0.as_ref();
+        loop {
+            if state.cancelled.load(Ordering::Relaxed) {
+                return true;
+            }
+            match state.parent.as_deref() {
+                Some(parent) => state = parent,
+                None => return false,
+            }
+        }
+    }
+    /// Cancelling a child stops its workers without labelling the caller interrupted.
+    pub(crate) fn child(&self) -> Self {
+        Self(Arc::new(CancellationState {
+            cancelled: AtomicBool::new(false),
+            parent: Some(self.0.clone()),
+        }))
     }
     fn check(&self) -> io::Result<()> {
         if self.is_cancelled() {
@@ -153,6 +174,11 @@ struct CheckedWriter<'a, W> {
 impl<W: Write> Write for CheckedWriter<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.cancellation.check()?;
+        #[cfg(test)]
+        if self.kind == ScanErrorKind::TemporaryStorage {
+            crate::batch::faults::hit(crate::batch::faults::Point::SnapshotWrite)
+                .map_err(|e| tag(self.kind, e))?;
+        }
         let count = self.output.write(bytes).map_err(|e| tag(self.kind, e))?;
         self.cancellation.check()?;
         Ok(count)
@@ -182,7 +208,11 @@ pub fn scan_selected(
         request,
         cancellation,
         progress,
-        tempfile::tempfile,
+        || {
+            #[cfg(test)]
+            crate::batch::faults::hit(crate::batch::faults::Point::SnapshotCreate)?;
+            tempfile::tempfile()
+        },
         &|_| cancellation.check(),
     )
 }

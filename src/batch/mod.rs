@@ -11,10 +11,13 @@
 // https://www.vulnex.com
 //
 
-//! Batch artifact contracts. Execution and CLI integration are not yet available.
+//! Native folder scanning and batch artifact contracts.
 pub mod cli;
 pub mod coordinator;
 pub mod discovery;
+pub mod execution;
+#[cfg(test)]
+pub(crate) mod faults;
 pub mod input;
 mod manifest;
 pub mod output;

@@ -14,13 +14,13 @@
 use clap::{parser::ValueSource, ArgMatches};
 use std::path::PathBuf;
 
-/// Composable grammar; not attached to the public CLI until execution is ready.
+/// Folder options shared by preflight and the public CLI.
 #[derive(clap::Args, Debug, Default)]
 pub struct FolderOptions {
     /// Include subdirectories
     #[arg(long)]
     pub recursive: bool,
-    /// Maximum concurrent scans
+    /// Maximum concurrent scans (default: available CPUs, capped at 4)
     #[arg(long)]
     pub jobs: Option<usize>,
     /// New or empty destination exclusively owned by this batch
