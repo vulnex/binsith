@@ -13,7 +13,7 @@
 
 use super::Args;
 use binsith::batch::cli::{FolderConfiguration, FolderOptions, InputKind, ProgressMode};
-use clap::{Args as _, CommandFactory, FromArgMatches};
+use clap::{CommandFactory, FromArgMatches};
 
 fn resolve(
     arguments: &[&str],
@@ -21,9 +21,8 @@ fn resolve(
     cpu: usize,
     tty: bool,
 ) -> Result<Option<FolderConfiguration>, String> {
-    // Extend the real single-file grammar only in tests: no duplicated option parser
-    // and no premature public folder flags before the execution path is ready.
-    let command = FolderOptions::augment_args(Args::command());
+    // Exercise the public grammar and its explicit-versus-default option values.
+    let command = Args::command();
     let matches = command
         .try_get_matches_from(arguments)
         .map_err(|e| e.to_string())?;
@@ -262,9 +261,7 @@ fn prepare_test(
     kind: InputKind,
     backend: &mut Backend,
 ) -> Result<Option<PreparedBatch<Claim>>, SetupError> {
-    let matches = FolderOptions::augment_args(Args::command())
-        .try_get_matches_from(arguments)
-        .unwrap();
+    let matches = Args::command().try_get_matches_from(arguments).unwrap();
     let options = FolderOptions::from_arg_matches(&matches).unwrap();
     preflight::prepare(
         &options,
@@ -433,9 +430,7 @@ fn normalized_configuration_preserves_existing_analysis_selection_rules() {
     ] {
         let mut argv = vec!["binsith", "samples", "--output-dir", "reports"];
         argv.extend(flags);
-        let matches = FolderOptions::augment_args(Args::command())
-            .try_get_matches_from(&argv)
-            .unwrap();
+        let matches = Args::command().try_get_matches_from(&argv).unwrap();
         let args = Args::from_arg_matches(&matches).unwrap();
         let config = preflight::analysis_configuration(&matches).unwrap();
         assert_eq!(
@@ -466,9 +461,7 @@ fn inspect_test(
     arguments: &[&str],
     input: Option<&Path>,
 ) -> Result<Option<preflight::FrozenBatch>, SetupError> {
-    let matches = FolderOptions::augment_args(Args::command())
-        .try_get_matches_from(arguments)
-        .unwrap();
+    let matches = Args::command().try_get_matches_from(arguments).unwrap();
     let options = FolderOptions::from_arg_matches(&matches).unwrap();
     preflight::inspect(&options, &matches, input, 8, false)
 }

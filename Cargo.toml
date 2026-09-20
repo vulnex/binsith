@@ -17,6 +17,7 @@ base64 = "0.21"
 clap = { version = "4.2", features = ["derive"] }
 tempfile = "3"
 url = "2.5"
+ctrlc = "3.5"
 
 [build-dependencies]
 sha2 = "0.10"

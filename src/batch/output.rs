@@ -11,6 +11,8 @@
 // https://www.vulnex.com
 //
 
+#[cfg(test)]
+use super::faults::{self, Journal, Point, Step};
 use super::{
     input::{open_checked, Snapshot},
     roots::{directory_path, is_link, resolve_roots, ResolvedRoots},
@@ -303,6 +305,8 @@ impl OutputClaim {
                 directory_snapshot(&directory).map_err(|e| OutputError::io(stage, e))?,
             );
         }
+        #[cfg(test)]
+        faults::hit(Point::ReportCreate).map_err(|e| OutputError::io(stage, e))?;
         let temporary = tempfile::Builder::new()
             .prefix(".pending-")
             .suffix(".json")
@@ -386,11 +390,30 @@ impl Drop for PendingReport {
 }
 impl Write for PendingReport {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        if let Err(error) = faults::hit(Point::ReportWrite) {
+            self.failed = true;
+            return Err(error);
+        }
+        #[cfg(test)]
+        if let Err(error) = faults::hit(Point::ReportPartial) {
+            self.failed = true;
+            self.temporary
+                .as_mut()
+                .unwrap()
+                .write_all(&bytes[..bytes.len().min(1)])?;
+            return Err(error);
+        }
         let result = self.temporary.as_mut().unwrap().write(bytes);
         self.failed |= result.is_err() || matches!(result, Ok(0) if !bytes.is_empty());
         result
     }
     fn flush(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if let Err(error) = faults::hit(Point::ReportFlush) {
+            self.failed = true;
+            return Err(error);
+        }
         let result = self.temporary.as_mut().unwrap().flush();
         self.failed |= result.is_err();
         result
@@ -447,6 +470,8 @@ impl PendingReport {
         let identity = Snapshot::opened(self.temporary.as_ref().unwrap().as_file())
             .map_err(|e| OutputError::io(OutputStage::Publish, e))?;
         let destination = self.owner.root().join(&self.location);
+        #[cfg(test)]
+        faults::hit(Point::ReportPublish).map_err(|e| OutputError::io(OutputStage::Publish, e))?;
         match self
             .temporary
             .take()
@@ -455,6 +480,9 @@ impl PendingReport {
         {
             Ok(file) => {
                 drop(file);
+                #[cfg(test)]
+                faults::hit(Point::ReportPublished)
+                    .map_err(|e| OutputError::io(OutputStage::Publish, e))?;
                 Ok(PublishedReport {
                     report_id: std::mem::take(&mut self.report_id),
                     location: std::mem::take(&mut self.location),
@@ -505,9 +533,31 @@ impl OwnedJournal {
     }
     pub(super) fn append(&mut self, value: &impl serde::Serialize) -> io::Result<()> {
         self.verify()?;
+        #[cfg(test)]
+        let kind = if self.path.file_name().is_some_and(|p| p == "errors.jsonl") {
+            Journal::Diagnostic
+        } else if serde_json::to_value(value)?["record_type"] == "admission" {
+            Journal::Admission
+        } else {
+            Journal::Terminal
+        };
+        #[cfg(test)]
+        {
+            faults::hit(Point::Journal(kind, Step::Write))?;
+            if let Err(error) = faults::hit(Point::Journal(kind, Step::Partial)) {
+                // A real torn JSON record reaches disk before the write reports failure.
+                self.file.write_all(b"{\"schema_version\":")?;
+                self.file.flush()?;
+                return Err(error);
+            }
+        }
         serde_json::to_writer(&mut self.file, value)?;
         self.file.write_all(b"\n")?;
+        #[cfg(test)]
+        faults::hit(Point::Journal(kind, Step::Flush))?;
         self.file.flush()?;
+        #[cfg(test)]
+        faults::hit(Point::Journal(kind, Step::Flushed))?;
         self.identity = Snapshot::opened(&self.file)?;
         self.verify()
     }
@@ -552,11 +602,17 @@ impl OutputClaim {
         manifest.validate().map_err(io::Error::other)?;
         self.0.verify()?;
         let destination = self.root().join("manifest.json");
+        #[cfg(test)]
+        faults::hit(Point::ManifestCreate)?;
         let mut temporary = tempfile::Builder::new()
             .prefix(".manifest-")
             .tempfile_in(self.root())?;
+        #[cfg(test)]
+        faults::hit(Point::ManifestWrite)?;
         serde_json::to_writer(&mut temporary, manifest)?;
         temporary.write_all(b"\n")?;
+        #[cfg(test)]
+        faults::hit(Point::ManifestFlush)?;
         temporary.flush()?;
         let identity = Snapshot::opened(temporary.as_file())?;
         self.0.verify()?;
@@ -571,6 +627,13 @@ impl OutputClaim {
         }
         // The first manifest never replaces data; later snapshots replace only
         // the previously owned manifest. Hostile concurrent mutation is excluded.
+        #[cfg(test)]
+        {
+            faults::hit(Point::ManifestReplace)?;
+            if manifest.status == super::BatchStatus::Complete {
+                faults::hit(Point::FinalManifestReplace)?;
+            }
+        }
         let result = if previous.is_some() {
             temporary.persist(destination)
         } else {

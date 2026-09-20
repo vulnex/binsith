@@ -39,8 +39,9 @@ report storage and terminal rendering. Throughput and memory vary with hardware,
 input content, enabled modes, custom patterns, and output destination; these are
 observations, not guaranteed bounds or cross-platform benchmark results.
 
-BinSith currently scans one file per invocation. Folder scans require an external
-loop or worker pool; native recursion and batch scheduling are not implemented.
+The development CLI also accepts a directory with `--output-dir`, using bounded
+native scan workers. Recursive traversal, per-file JSON reports, outcome journals
+and cooperative interruption are available.
 Combined analysis modes can require temporary disk space proportional to the
 selected input range. See [Resource limits](#resource-limits) and
 [Robustness and performance checks](#robustness-and-performance-checks) for limits
@@ -615,3 +616,39 @@ passed, not that an indicator is malicious, reachable, or authentic.
 Copyright 2026 VULNEX - Simon Roses Femerling.
 
 BinSith is licensed under the [Apache License 2.0](LICENSE).
+
+
+## Folder scanning (development)
+
+```sh
+binsith ./samples --output-dir ./reports -s
+binsith ./samples --output-dir ./recursive-reports --recursive -s --jobs 4
+```
+
+The destination must be new or empty. Folder scanning writes `manifest.json`,
+`files.jsonl`, `errors.jsonl`, and sharded reports under `results/`. Without `-s`
+or another string-analysis option, indicator counts are `null` (not analyzed).
+Subdirectories are skipped unless `--recursive` is supplied; symlinks and special
+files are skipped. Input and output roots must not contain symlink components.
+Output may be inside the input tree, where it is excluded from discovery.
+
+`--jobs` defaults to the available CPU count capped at 4. Positive explicit counts
+are accepted subject to checked queue arithmetic and OS resources. Thread startup
+failure stops setup before discovery. At most N files are active and 2N are queued;
+these bounds are not total memory or temporary-disk quotas. Analysis flags, including ranges and entropy,
+apply independently to every file. Single-file report destinations, JSONL output,
+comparison, hex dumps, indicator export and custom match exit codes are unsupported
+in folder mode. Use a fresh destination for each run; resume is not implemented.
+
+File failures continue by default. `--fail-fast` stops discovery and cancels queued
+files after a file or discovery error; limited coverage alone does not trigger it.
+The first Ctrl+C requests cooperative shutdown and preserves published reports.
+A second Ctrl+C exits promptly with best-effort cleanup. Blocked filesystem calls
+may delay cooperative shutdown. An incomplete manifest must not be interpreted as
+a finished inventory, even when reports are present.
+
+Folder exit codes are 0 for fully successful completion, 1 for execution failures
+or limited coverage, 2 for setup errors, and 130 for interruption. Human summaries
+and progress use stderr; stdout stays empty. `-q` suppresses the summary and automatic
+progress; `--progress` explicitly enables periodic counter and selected-byte lines. Rich progress
+rendering and throughput estimates are planned separately.
