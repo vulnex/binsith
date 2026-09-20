@@ -4,7 +4,7 @@
 // File: batch_cli_tests.rs
 // Author: Simon Roses Femerling
 // Created: 2026-09-19
-// Last Modified: 2026-09-19
+// Last Modified: 2026-09-20
 // Version: 0.4.2
 // License: Apache-2.0
 // Copyright (c) 2026 VULNEX. All rights reserved.
@@ -460,4 +460,144 @@ fn normalized_configuration_preserves_existing_analysis_selection_rules() {
             .is_none()
     );
     assert!(backend.calls.is_empty());
+}
+
+fn inspect_test(
+    arguments: &[&str],
+    input: Option<&Path>,
+) -> Result<Option<preflight::FrozenBatch>, SetupError> {
+    let matches = FolderOptions::augment_args(Args::command())
+        .try_get_matches_from(arguments)
+        .unwrap();
+    let options = FolderOptions::from_arg_matches(&matches).unwrap();
+    preflight::inspect(&options, &matches, input, 8, false)
+}
+
+#[test]
+fn concrete_preflight_freezes_patterns_and_options_before_filesystem_setup() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(temp.path()).unwrap();
+    let input = base.join("samples");
+    let output = input.join("reports");
+    let patterns = base.join("patterns.toml");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(&patterns, "URL = 'https?://[^ ]+'\nUnused = 'unused'").unwrap();
+    let frozen = inspect_test(
+        &[
+            "binsith",
+            "samples",
+            "--output-dir",
+            output.to_str().unwrap(),
+            "--patterns",
+            patterns.to_str().unwrap(),
+            "--category",
+            "URL,URL",
+            "--jobs",
+            "3",
+            "--offset",
+            "0x10",
+            "--length",
+            "0",
+            "--recursive",
+        ],
+        Some(&input),
+    )
+    .unwrap()
+    .unwrap();
+    // Removing the source cannot affect this batch or trigger later recompilation.
+    std::fs::remove_file(patterns).unwrap();
+    assert_eq!(frozen.patterns().len(), 1);
+    assert!(frozen.patterns()[0].1.is_match("https://example.org"));
+    let config = frozen.configuration();
+    assert_eq!(config.jobs, 3);
+    assert_eq!(config.work_queue_capacity, 6);
+    assert!(config.recursive);
+    assert_eq!(config.analysis.offset, 16);
+    assert_eq!(config.analysis.length, Some(0));
+    assert_eq!(config.analysis.categories, ["URL"]);
+    assert_eq!(
+        config.patterns_sha256,
+        pattern_fingerprint(
+            frozen
+                .patterns()
+                .iter()
+                .map(|(n, r)| (n.as_str(), r.as_str()))
+        )
+    );
+    assert_eq!(frozen.roots().input(), input);
+    assert_eq!(frozen.roots().output(), output);
+    assert!(!output.exists());
+    assert_eq!(std::fs::read_dir(input).unwrap().count(), 0);
+    fn shareable<T: Send + Sync>() {}
+    shareable::<preflight::FrozenBatch>();
+}
+
+#[test]
+fn concrete_preflight_returns_stage_specific_errors_without_output_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(temp.path()).unwrap();
+    let input = base.join("samples");
+    let output = base.join("out");
+    let missing_patterns = base.join("missing.toml");
+    std::fs::create_dir(&input).unwrap();
+    for (flags, stage) in [
+        (
+            vec![
+                "--jobs",
+                "0",
+                "--patterns",
+                missing_patterns.to_str().unwrap(),
+            ],
+            SetupStage::Options,
+        ),
+        (
+            vec!["--patterns", missing_patterns.to_str().unwrap()],
+            SetupStage::Patterns,
+        ),
+        (vec!["--category", "unknown"], SetupStage::Patterns),
+    ] {
+        let mut args = vec![
+            "binsith",
+            "samples",
+            "--output-dir",
+            output.to_str().unwrap(),
+        ];
+        args.extend(flags);
+        let error = inspect_test(&args, Some(&input)).err().unwrap();
+        assert_eq!(error.stage, stage);
+        assert_eq!(error.exit_status().code(), 2);
+        assert!(!output.exists());
+    }
+    let error = inspect_test(
+        &["binsith", "samples", "--output-dir", base.to_str().unwrap()],
+        Some(&input),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.stage, SetupStage::Roots);
+    assert_eq!(error.exit_status().code(), 2);
+    assert_eq!(std::fs::read_dir(input).unwrap().count(), 0);
+}
+
+#[test]
+fn concrete_preflight_leaves_single_file_stdin_and_listing_to_existing_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("sample");
+    std::fs::write(&input, b"data").unwrap();
+    for (args, path) in [
+        (
+            vec!["binsith", "sample", "--patterns", "missing.toml"],
+            Some(input.as_path()),
+        ),
+        (vec!["binsith", "-"], Some(Path::new("-"))),
+        (vec!["binsith", "--list-categories"], None),
+    ] {
+        assert!(inspect_test(&args, path).unwrap().is_none());
+        let mut invalid = args;
+        invalid.push("--recursive");
+        assert_eq!(
+            inspect_test(&invalid, path).err().unwrap().stage,
+            SetupStage::Options
+        );
+    }
 }

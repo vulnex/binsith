@@ -4,7 +4,7 @@
 // File: batch/preflight.rs
 // Author: Simon Roses Femerling
 // Created: 2026-09-19
-// Last Modified: 2026-09-19
+// Last Modified: 2026-09-20
 // Version: 0.4.2
 // License: Apache-2.0
 // Copyright (c) 2026 VULNEX. All rights reserved.
@@ -97,6 +97,46 @@ pub fn prepare<B: SetupBackend>(
     context: SetupContext<'_>,
     backend: &mut B,
 ) -> Result<Option<PreparedBatch<B::Ready>>, SetupError> {
+    let Some(validated) = validate_configuration(folder, matches, &context, |path| {
+        backend.load_patterns(path)
+    })?
+    else {
+        return Ok(None);
+    };
+    let ValidatedConfiguration {
+        folder,
+        configuration,
+        patterns,
+    } = validated;
+    let roots = backend
+        .resolve_roots(context.input, &folder.output_dir)
+        .map_err(|e| SetupError::at(SetupStage::Roots, e))?;
+    let output = backend
+        .claim_output(roots)
+        .map_err(|e| SetupError::at(SetupStage::Output, e))?;
+    let resources = backend
+        .initialize(output, &configuration)
+        .map_err(|e| SetupError::at(SetupStage::Initialize, e))?;
+    Ok(Some(PreparedBatch {
+        folder,
+        configuration,
+        patterns,
+        resources,
+    }))
+}
+
+struct ValidatedConfiguration {
+    folder: FolderConfiguration,
+    configuration: BatchConfiguration,
+    patterns: Vec<(String, Regex)>,
+}
+
+fn validate_configuration(
+    folder: &FolderOptions,
+    matches: &ArgMatches,
+    context: &SetupContext<'_>,
+    load_patterns: impl FnOnce(Option<&str>) -> SetupResult<Vec<(String, Regex)>>,
+) -> Result<Option<ValidatedConfiguration>, SetupError> {
     let quiet =
         value::<bool>(matches, "quiet").map_err(|e| SetupError::at(SetupStage::Options, e))?;
     let Some(folder) = folder
@@ -116,8 +156,7 @@ pub fn prepare<B: SetupBackend>(
     let pattern_path = matches
         .try_get_one::<String>("patterns")
         .map_err(|e| SetupError::at(SetupStage::Options, e.to_string()))?;
-    let mut patterns = backend
-        .load_patterns(pattern_path.map(String::as_str))
+    let mut patterns = load_patterns(pattern_path.map(String::as_str))
         .map_err(|e| SetupError::at(SetupStage::Patterns, e))?;
     for category in &analysis.categories {
         if !patterns.iter().any(|(name, _)| name == category) {
@@ -142,21 +181,68 @@ pub fn prepare<B: SetupBackend>(
         ),
         analysis,
     };
-    let roots = backend
-        .resolve_roots(context.input, &folder.output_dir)
-        .map_err(|e| SetupError::at(SetupStage::Roots, e))?;
-    let output = backend
-        .claim_output(roots)
-        .map_err(|e| SetupError::at(SetupStage::Output, e))?;
-    let resources = backend
-        .initialize(output, &configuration)
-        .map_err(|e| SetupError::at(SetupStage::Initialize, e))?;
-    Ok(Some(PreparedBatch {
+    Ok(Some(ValidatedConfiguration {
         folder,
         configuration,
         patterns,
-        resources,
     }))
+}
+
+/// Immutable preflight result, shareable with workers through Arc. No output has
+/// been claimed, no manifest created, and no discovery started. Resource setup
+/// must succeed before this can become an executable batch.
+pub struct FrozenBatch {
+    validated: ValidatedConfiguration,
+    roots: super::roots::ResolvedRoots,
+}
+impl FrozenBatch {
+    pub fn folder(&self) -> &FolderConfiguration {
+        &self.validated.folder
+    }
+    pub fn configuration(&self) -> &BatchConfiguration {
+        &self.validated.configuration
+    }
+    pub fn patterns(&self) -> &[(String, Regex)] {
+        &self.validated.patterns
+    }
+    pub fn roots(&self) -> &super::roots::ResolvedRoots {
+        &self.roots
+    }
+}
+
+/// Concrete FS-08 preflight. Detect the mode using metadata only, reuse the real
+/// option contract and pattern loader, then resolve native filesystem roots.
+/// A single-file/stdin/category-listing request returns None without pattern I/O.
+/// The public CLI will call this once execution is integrated in FS-12.
+pub fn inspect(
+    folder: &FolderOptions,
+    matches: &ArgMatches,
+    input: Option<&Path>,
+    available_parallelism: usize,
+    stderr_is_terminal: bool,
+) -> Result<Option<FrozenBatch>, SetupError> {
+    let listing = value::<bool>(matches, "list_categories")
+        .map_err(|e| SetupError::at(SetupStage::Options, e))?;
+    let input_kind = super::roots::classify_input(input, listing)
+        .map_err(|e| SetupError::at(SetupStage::Roots, e))?;
+    let context = SetupContext {
+        input: input.unwrap_or_else(|| Path::new("")),
+        input_kind,
+        available_parallelism,
+        stderr_is_terminal,
+    };
+    let Some(validated) = validate_configuration(
+        folder,
+        matches,
+        &context,
+        crate::string_analysis::load_patterns,
+    )?
+    else {
+        return Ok(None);
+    };
+    let roots = super::roots::resolve_roots(context.input, &validated.folder.output_dir)
+        .map_err(|e| SetupError::at(SetupStage::Roots, e))?;
+    Ok(Some(FrozenBatch { validated, roots }))
 }
 
 fn value<T: Clone + Send + Sync + 'static>(matches: &ArgMatches, id: &str) -> Result<T, String> {
