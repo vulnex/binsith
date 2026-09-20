@@ -13,9 +13,11 @@
 
 //! Batch artifact contracts. Execution and CLI integration are not yet available.
 pub mod cli;
+pub mod coordinator;
 pub mod discovery;
 pub mod input;
 mod manifest;
+pub mod output;
 mod path;
 pub mod preflight;
 mod records;
