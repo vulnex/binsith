@@ -194,6 +194,45 @@ fn setup_errors_do_not_claim_output_and_folder_flags_reject_single_files() {
     assert!(!output.exists());
 }
 #[test]
+fn summary_preflight_validates_all_patterns_and_preserves_filtered_fingerprints() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    fs::write(input.join("sample"), b"hello").unwrap();
+    let patterns = temp.path().join("patterns.toml");
+    let path = patterns.to_str().unwrap();
+    for (index, invalid) in ["[", "a{100000000}"].iter().enumerate() {
+        fs::write(&patterns, format!("keep = 'hello'\nunused = '{invalid}'\n")).unwrap();
+        for strings in [false, true] {
+            let output = temp.path().join(format!("invalid-{index}-{strings}"));
+            let mut flags = vec!["--patterns", path, "--category", "keep"];
+            if strings {
+                flags.push("-s");
+            }
+            let result = run(&input, &output, &flags);
+            assert_eq!(result.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&result.stderr).contains("invalid pattern unused"));
+            assert!(
+                !output.exists(),
+                "pattern errors must precede output claims"
+            );
+        }
+    }
+    fs::write(&patterns, "keep = 'hello'\nunused = 'world'\n").unwrap();
+    let expected = binsith::batch::pattern_fingerprint([("keep", "hello")]);
+    for strings in [false, true] {
+        let output = temp.path().join(format!("valid-{strings}"));
+        let mut flags = vec!["--patterns", path, "--category", "keep"];
+        if strings {
+            flags.push("-s");
+        }
+        let result = run(&input, &output, &flags);
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(manifest(&output).configuration.patterns_sha256, expected);
+    }
+}
+
+#[test]
 fn per_file_range_and_findings_match_single_file_json() {
     let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let input = temp.path().join("input");
