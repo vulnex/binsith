@@ -24,6 +24,9 @@ pub enum Step {
 pub enum Point {
     WorkerSpawn,
     ScanStart,
+    QueueSaturated,
+    BeforeTerminalSend,
+    AfterTerminalSend,
     ReportCreate,
     ReportWrite,
     ReportPartial,
@@ -45,9 +48,14 @@ pub enum Action {
     Crash,
     Collision(PathBuf),
     Gate(Arc<Gate>),
+    Observe(Arc<Gate>),
+    Panic,
 }
 #[derive(Clone)]
-pub struct Plan(Arc<Mutex<State>>);
+pub struct Plan {
+    rules: Vec<Arc<Mutex<State>>>,
+    event_capacity: Option<usize>,
+}
 struct State {
     point: Point,
     occurrence: usize,
@@ -57,19 +65,31 @@ struct State {
 }
 impl Plan {
     pub fn new(point: Point, occurrence: usize, action: Action) -> Self {
-        Self(Arc::new(Mutex::new(State {
-            point,
-            occurrence,
-            hits: 0,
-            fired: false,
-            action,
-        })))
+        Self {
+            rules: vec![Arc::new(Mutex::new(State {
+                point,
+                occurrence,
+                hits: 0,
+                fired: false,
+                action,
+            }))],
+            event_capacity: None,
+        }
+    }
+    pub fn and(mut self, other: Self) -> Self {
+        self.rules.extend(other.rules);
+        self
+    }
+    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
+        assert!(capacity > 0);
+        self.event_capacity = Some(capacity);
+        self
     }
     pub fn hits(&self) -> usize {
-        self.0.lock().unwrap().hits
+        self.rules.iter().map(|r| r.lock().unwrap().hits).sum()
     }
     pub fn fired(&self) -> bool {
-        self.0.lock().unwrap().fired
+        self.rules.iter().all(|r| r.lock().unwrap().fired)
     }
 }
 thread_local! { static PLAN: RefCell<Option<Plan>> = const { RefCell::new(None) }; }
@@ -85,38 +105,47 @@ impl Drop for Guard {
         PLAN.with(|p| p.replace(self.0.take()));
     }
 }
+pub fn event_capacity(default: usize) -> usize {
+    current().and_then(|p| p.event_capacity).unwrap_or(default)
+}
 pub fn hit(point: Point) -> io::Result<()> {
     let Some(plan) = current() else {
         return Ok(());
     };
-    let action = {
-        let mut state = plan.0.lock().unwrap();
-        if state.point != point {
-            return Ok(());
-        }
-        state.hits += 1;
-        if matches!(state.action, Action::Gate(_)) {
-            if state.hits > state.occurrence {
-                return Ok(());
+    for rule in plan.rules {
+        let action = {
+            let mut state = rule.lock().unwrap();
+            if state.point != point {
+                continue;
             }
-        } else if state.fired || state.hits != state.occurrence {
-            return Ok(());
-        }
-        state.fired = true;
-        state.action.clone()
-    };
-    match action {
-        Action::Full => Err(io::Error::new(
-            io::ErrorKind::StorageFull,
-            format!("injected storage full at {point:?}"),
-        )),
-        Action::Crash => std::process::exit(99),
-        Action::Collision(path) => std::fs::write(path, b"foreign report: preserve these bytes"),
-        Action::Gate(gate) => {
-            gate.enter();
-            Ok(())
+            state.hits += 1;
+            if matches!(state.action, Action::Gate(_) | Action::Observe(_)) {
+                if state.hits > state.occurrence {
+                    continue;
+                }
+            } else if state.fired || state.hits != state.occurrence {
+                continue;
+            }
+            state.fired = true;
+            state.action.clone()
+        };
+        match action {
+            Action::Full => {
+                return Err(io::Error::new(
+                    io::ErrorKind::StorageFull,
+                    format!("injected storage full at {point:?}"),
+                ))
+            }
+            Action::Crash => std::process::exit(99),
+            Action::Collision(path) => {
+                std::fs::write(path, b"foreign report: preserve these bytes")?
+            }
+            Action::Gate(gate) => gate.enter(),
+            Action::Observe(gate) => gate.arrive(),
+            Action::Panic => panic!("injected worker panic at {point:?}"),
         }
     }
+    Ok(())
 }
 
 /// Test-controlled rendezvous with bounded parent waits and explicit release.
@@ -126,6 +155,13 @@ pub struct Gate {
     changed: Condvar,
 }
 impl Gate {
+    fn arrive(&self) {
+        self.state.lock().unwrap().0 += 1;
+        self.changed.notify_all();
+    }
+    pub fn count(&self) -> usize {
+        self.state.lock().unwrap().0
+    }
     fn enter(&self) {
         let mut state = self.state.lock().unwrap();
         state.0 += 1;

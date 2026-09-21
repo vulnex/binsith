@@ -715,32 +715,29 @@ fn print_string(f: &string_analysis::StringFinding, out: &mut impl Write) -> io:
 }
 
 fn folder_run(batch: binsith::batch::preflight::FrozenBatch) -> u8 {
-    use binsith::{batch::execution, scanner::CancellationToken};
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+    use binsith::{
+        batch::{execution, signals::InterruptHandler},
+        scanner::CancellationToken,
     };
     let cancellation = CancellationToken::default();
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let signal = interrupted.clone();
-    let token = cancellation.clone();
-    if let Err(error) = ctrlc::set_handler(move || {
-        if signal.swap(true, Ordering::SeqCst) {
-            std::process::exit(130);
+    let interrupted = match InterruptHandler::install(cancellation.clone()) {
+        Ok(handler) => handler,
+        Err(error) => {
+            eprintln!("binsith: cannot install interrupt handler: {error}");
+            return 2;
         }
-        token.cancel();
-    }) {
-        eprintln!("binsith: cannot install interrupt handler: {error}");
-        return 2;
-    }
+    };
     match execution::run(&batch, cancellation) {
         Ok(result) => {
             if batch.folder().human_summary {
-                eprintln!("Batch: {} complete, {} limited, {} failed, {} skipped, {} cancelled; {} discovery errors",
-                    result.counters.complete, result.counters.limited, result.counters.failed,
-                    result.counters.policy_skipped, result.counters.cancelled, result.counters.discovery_errors);
+                binsith::batch::progress::summary(
+                    io::stderr(),
+                    result.batch_status,
+                    &result.counters,
+                    batch.roots().output(),
+                );
             }
-            if interrupted.load(Ordering::SeqCst) {
+            if interrupted.is_interrupted() {
                 130
             } else {
                 result.status.code()
@@ -748,7 +745,7 @@ fn folder_run(batch: binsith::batch::preflight::FrozenBatch) -> u8 {
         }
         Err(error) => {
             eprintln!("binsith: {}", utils::escape_string(&error.message));
-            if interrupted.load(Ordering::SeqCst) {
+            if interrupted.is_interrupted() {
                 130
             } else {
                 error.status.code()

@@ -422,3 +422,20 @@ fn parallel_cli_default_uses_available_cpus_capped_at_four() {
             .clamp(1, 4)
     );
 }
+
+#[test]
+fn explicit_progress_with_quiet_keeps_stdout_clean_and_reports_processed_work() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    fs::write(input.join("a"), b"hello").unwrap();
+    let output = temp.path().join("reports");
+    let result = run(&input, &output, &["-q", "--progress"]);
+    assert!(result.status.success() && result.stdout.is_empty());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("Discovering: 0/? processed"));
+    assert!(stderr.contains("Finished: 1/1 processed"));
+    assert!(stderr.contains("5 selected bytes read"));
+    assert!(!stderr.contains("Batch finished") && !stderr.contains('\x1b'));
+    assert_eq!(manifest(&output).counters.complete, 1);
+}

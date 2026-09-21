@@ -492,6 +492,44 @@ mod tests {
     }
 
     #[test]
+    fn deep_spool_measures_path_state_without_retaining_ancestor_handles() {
+        let mut measurements = Vec::new();
+        for depth in [32, 128] {
+            let (_temp, roots) = fixture();
+            let mut path = roots.input().to_path_buf();
+            for _ in 0..depth {
+                path.push("d");
+                fs::create_dir(&path).unwrap();
+                fs::write(path.join("file"), b"x").unwrap();
+            }
+            let mut discovery = Discovery::new(&roots, true, CancellationToken::default()).unwrap();
+            let mut files = 0;
+            let mut scratch = 0;
+            let mut record = 0;
+            while let Some(event) = discovery.next() {
+                assert!(matches!(event, DiscoveryEvent::File(_)));
+                files += 1;
+                let queue = discovery.pending.as_ref().unwrap();
+                scratch = scratch.max(queue.end);
+                record = record.max(queue.max_record);
+                assert!(queue.read <= queue.end);
+                assert!(discovery.active.is_some());
+            }
+            assert_eq!(files, depth);
+            assert!(discovery.discovery_complete());
+            assert!(discovery.active.is_none() && discovery.pending.is_none());
+            println!("depth={depth} spool_bytes={scratch} max_record_bytes={record}");
+            measurements.push((scratch, record));
+        }
+        // A linear-depth chain has quadratic cumulative path bytes on disk,
+        // but only a longest-path record is decoded at once. Metadata adds a
+        // fixed per-record cost, so do not assume an exact growth multiplier.
+        assert!(measurements[1].0 > measurements[0].0 * 4);
+        assert!(measurements[1].1 > measurements[0].1);
+        assert!(measurements[1].1 < measurements[0].1 * 4);
+    }
+
+    #[test]
     fn breadth_is_spooled_without_holding_directory_handles_or_paths_in_memory() {
         let (_temp, roots) = fixture();
         for i in 0..128 {

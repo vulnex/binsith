@@ -331,6 +331,14 @@ pub(super) fn storage_fixture(input: &Path, output: &Path) -> FrozenBatch {
 
 #[cfg(test)]
 impl FrozenBatch {
+    pub(super) fn test_fail_fast(&mut self) {
+        self.validated.configuration.fail_fast = true;
+        self.validated.folder.fail_fast = true;
+    }
+    pub(super) fn test_limited_strings(&mut self) {
+        self.validated.configuration.analysis.strings = true;
+        self.validated.configuration.analysis.max_string_bytes = 4;
+    }
     pub(super) fn test_jobs(&mut self, jobs: usize) {
         self.validated.configuration.jobs = jobs;
         self.validated.configuration.work_queue_capacity = jobs.checked_mul(2).unwrap();
