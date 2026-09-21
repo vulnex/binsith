@@ -19,12 +19,28 @@ jobs:
       - run: cargo +stable test --locked
       - run: cargo +stable test --release --locked
       - run: cargo +stable build --release --locked
-      - name: Folder benchmark measurement and regression gate contracts
-        if: runner.os == 'Linux'
-        run: python3 tools/test_folder_benchmarks.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Folder filesystem identities and volume capabilities
+        run: python tools/check_folder_filesystems.py --output target/fs19-filesystems.json
+      - name: Native terminal and closed-pipe behavior
+        if: runner.os != 'Windows'
+        run: |
+          python tools/check_folder_progress.py --binary target/debug/binsith
+          python tools/check_folder_progress.py --binary target/release/binsith
+      - name: Folder benchmark and scale validator contracts
+        if: runner.os != 'Windows'
+        run: python -m unittest discover -s tools -p 'test_folder*.py'
       - name: JSON and CSV standard-consumer compatibility
-        if: runner.os == 'Linux'
-        run: python3 tools/check_export_compatibility.py
+        run: python tools/check_export_compatibility.py
+      - name: Preserve filesystem capability evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: filesystem-evidence-${{ matrix.os }}
+          path: target/fs19-filesystems.json
+          if-no-files-found: warn
       - name: Bounded CLI stress and benchmark smoke
         if: runner.os == 'Linux'
         run: python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-smoke.json

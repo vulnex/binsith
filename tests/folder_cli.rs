@@ -260,9 +260,9 @@ fn sigint_cancels_active_and_queued_work_and_releases_claim() {
         .arg(&input)
         .arg("--output-dir")
         .arg(&output)
-        .arg("-q")
+        .arg("--progress")
         .args(["--jobs", "1"])
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -300,6 +300,25 @@ fn sigint_cancels_active_and_queued_work_and_releases_claim() {
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(130));
+    use std::io::Read;
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .unwrap();
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("Batch incomplete: 3 processed"), "{stderr}");
+    assert!(stderr.contains("3 cancelled") && stderr.contains("Stopping: 3/? processed"));
+    assert!(!stderr.contains("Finished:") && !stderr.contains("remaining"));
     let m = manifest(&output);
     assert_eq!(m.counters.cancelled, 3);
     assert_eq!(m.counters.queued + m.counters.active, 0);
@@ -438,4 +457,115 @@ fn explicit_progress_with_quiet_keeps_stdout_clean_and_reports_processed_work() 
     assert!(stderr.contains("5 selected bytes read"));
     assert!(!stderr.contains("Batch finished") && !stderr.contains('\x1b'));
     assert_eq!(manifest(&output).counters.complete, 1);
+}
+
+#[test]
+fn summary_matrix_keeps_analysis_coverage_and_artifact_paths_visible() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    fs::write(
+        input.join("a"),
+        b"https://example.com\0abcdefghijklmnopqrstuvwxyz",
+    )
+    .unwrap();
+    for (name, flags, code, expected) in [
+        ("summary", vec![], 0, "indicators not analyzed"),
+        (
+            "strings",
+            vec!["-s"],
+            0,
+            "1 files with indicators (0 limited)",
+        ),
+        (
+            "limited",
+            vec!["-s", "--max-string-bytes", "24"],
+            1,
+            "1 files with indicators (1 limited)",
+        ),
+        ("failed", vec!["--offset", "999"], 1, "1 failed"),
+        (
+            "stopped",
+            vec!["--offset", "999", "--fail-fast"],
+            1,
+            "Batch incomplete",
+        ),
+    ] {
+        let output = temp.path().join(name);
+        let result = run(&input, &output, &flags);
+        assert_eq!(result.status.code(), Some(code), "{name}");
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        assert!(stderr.contains(expected), "{name}: {stderr}");
+        assert!(!stderr.contains("Discovering:") && !stderr.contains("https://example.com"));
+        if name != "stopped" {
+            assert!(stderr.contains("Batch finished"));
+        }
+        for (label, file) in [
+            ("Manifest", "manifest.json"),
+            ("Files", "files.jsonl"),
+            ("Errors", "errors.jsonl"),
+            ("Reports", "results"),
+        ] {
+            assert!(stderr.contains(&format!("{label}: {:?}", output.join(file))));
+        }
+        manifest(&output);
+    }
+}
+
+#[test]
+fn progress_counts_selected_bytes_once_across_workers_and_extra_passes() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    for i in 0..9 {
+        fs::write(
+            input.join(i.to_string()),
+            b"prefix\0https://example.com\0suffix",
+        )
+        .unwrap();
+    }
+    for jobs in ["1", "4"] {
+        let output = temp.path().join(jobs);
+        let result = run(
+            &input,
+            &output,
+            &[
+                "--jobs",
+                jobs,
+                "--progress",
+                "-q",
+                "-s",
+                "--entropy",
+                "--scan-utf16",
+                "--offset",
+                "7",
+                "--length",
+                "20",
+            ],
+        );
+        assert!(result.status.success() && result.stdout.is_empty());
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        let final_line = stderr.lines().last().unwrap();
+        assert!(final_line.contains("Finished: 9/9 processed"));
+        assert!(final_line.contains("180 selected bytes read"), "{stderr}");
+        assert!(!stderr.contains("https://example.com"));
+        assert_eq!(manifest(&output).counters.complete, 9);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn summary_escapes_native_output_path_controls() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    let output = temp.path().join("reports\n\r\x1b[31m\t");
+    let result = run(&input, &output, &[]);
+    assert!(result.status.success() && result.stdout.is_empty());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 5);
+    assert!(!stderr.contains('\x1b') && !stderr.contains('\r') && !stderr.contains('\t'));
+    assert!(stderr.contains(&format!("Manifest: {:?}", output.join("manifest.json"))));
+    manifest(&output);
 }

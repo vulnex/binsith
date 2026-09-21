@@ -157,6 +157,74 @@ mod tests {
     }
 
     #[test]
+    fn flush_failures_disable_all_future_attempts_and_disabled_mode_never_writes() {
+        #[derive(Default)]
+        struct FlushFailure {
+            writes: usize,
+            flushes: usize,
+        }
+        impl Write for FlushFailure {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes += 1;
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        for mode in [
+            ProgressMode::Interactive,
+            ProgressMode::Plain,
+            ProgressMode::Disabled,
+        ] {
+            let mut display = Progress::new(FlushFailure::default(), mode);
+            display.update(&fixture(), 0, Duration::ZERO, true);
+            let writes = display.writer.writes;
+            display.update(&fixture(), 1, Duration::from_secs(10), true);
+            assert_eq!(display.writer.writes, writes);
+            assert_eq!(
+                display.writer.flushes,
+                usize::from(mode != ProgressMode::Disabled)
+            );
+            assert_eq!(display.mode, ProgressMode::Disabled);
+        }
+    }
+
+    #[test]
+    fn interrupted_discovery_separates_skips_errors_and_committed_outcomes() {
+        let mut manifest = fixture();
+        manifest.stop_reasons.push("interrupted".into());
+        manifest.counters = Counters {
+            complete: 2,
+            limited: 3,
+            failed: 4,
+            cancelled: 5,
+            policy_skipped: 7,
+            discovery_errors: 8,
+            ..Counters::default()
+        };
+        let mut display = Progress::new(Vec::new(), ProgressMode::Interactive);
+        display.update(&manifest, 99, Duration::from_secs(10), true);
+        let text = String::from_utf8(display.writer).unwrap();
+        assert!(text.contains("Stopping: 14/? processed"));
+        assert!(text.contains("7 skipped | 8 discovery errors"));
+        assert!(!text.contains("remaining") && !text.contains('\x1b'));
+        let mut output = Vec::new();
+        summary(
+            &mut output,
+            BatchStatus::Incomplete,
+            &manifest.counters,
+            Path::new("reports"),
+        );
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Batch incomplete: 14 processed"));
+        assert!(text.contains(
+            "2 complete, 3 limited, 4 failed, 7 skipped, 5 cancelled; 8 discovery errors"
+        ));
+    }
+
+    #[test]
     fn progress_throttles_and_requires_stable_file_rates_for_eta() {
         let mut manifest = fixture();
         let mut progress = Progress::new(Vec::new(), ProgressMode::Plain);
