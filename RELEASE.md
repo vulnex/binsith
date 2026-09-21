@@ -1,7 +1,10 @@
 # Release procedure
 
-The current version is `0.4.2`. Its supported role is static triage with
-analyst review. See CHANGELOG.md for consumer-visible behavior changes.
+The published version is `0.4.2`. Native folder scanning is an **unreleased**
+change, even while Cargo still reports 0.4.2. Do not replace the published assets
+with this development build. Choose a new version only when qualifying its release.
+The supported role remains static triage with analyst review. See CHANGELOG.md
+for consumer-visible behavior changes.
 
 ## Local verification
 
@@ -25,6 +28,35 @@ loaded libraries. Static corpus evaluation is separate and remains local.
 The export check compares JSON with CSV parsed by Python's standard libraries,
 including quoted Unicode values, empty exports, validation filters, and limited
 analysis. It does not replace testing your downstream application's importer.
+
+## Folder-scanning candidate checks
+
+After building the candidate, run the POSIX documentation examples on macOS/Linux:
+
+```sh
+python3 tools/check_folder_examples.py --output target/folder-examples.json
+python3 tools/check_folder_filesystems.py --output target/folder-filesystems.json
+python3 tools/check_folder_progress.py --binary target/debug/binsith
+python3 tools/check_folder_progress.py --binary target/release/binsith
+python3 -m unittest discover -s tools -p 'test_folder*.py'
+```
+
+Evidence paths must be new. Run the prepared Windows-specific filesystem and
+console checks in a native Windows environment before qualifying that platform.
+A cross-compile is insufficient. Retain build/source identity and log hashes for
+each platform; the final candidate must include the tested scanner source.
+
+Keep the folder performance thresholds frozen. Retain the warm and controlled
+write-latency matrices, and run the physical-storage procedure in
+[the storage runbook](devnotes/benchmarks/folder-storage-validation.md) on an
+appropriate data volume. Synthetic sleeps do not close physical-storage coverage.
+Do not promote an inconclusive noisy case as a pass; preserve original and repeated
+observations. Do not turn development validation claims into published-release
+claims while Windows/storage gaps are open.
+
+The [folder readiness review](devnotes/folder-release-readiness.md) records current
+local evidence and outstanding work. It is a development checkpoint, not permission
+to publish or a replacement for final-commit CI, fuzzing and package verification.
 
 ## Package
 
@@ -58,7 +90,9 @@ publisher authenticity. This procedure does not claim reproducible compilation.
 ## Promotion gates
 
 1. Run the configured Linux, macOS, and Windows CI matrix on the final candidate
-   commit, including strict Clippy, debug/release tests, and release builds.
+   commit, including strict Clippy, debug/release tests, release builds and the
+   folder-specific filesystem/console checks. Close or explicitly accept any
+   remaining platform/storage scope limitations before qualification.
 2. Pass the Linux sanitizer fuzz job and bounded stress job on that commit.
 3. Exercise downstream JSON/CSV consumers when an application is in scope.
    For 0.4.2, the project owner confirmed no downstream application is in scope;

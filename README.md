@@ -620,35 +620,177 @@ BinSith is licensed under the [Apache License 2.0](LICENSE).
 
 ## Folder scanning (development)
 
+Directory scanning is available in the development build; it is not included in
+published 0.4.2 downloads. Build the current checkout with `cargo build --locked
+--release` and use `target/release/binsith` (or put that binary on your `PATH`).
+macOS and Linux runtime checks pass. Native Windows folder validation is pending.
+
+### Try a small folder
+
+Run these macOS/Linux examples in a directory where `folder-demo` does not exist.
+The fixtures contain only synthetic text. Each scan uses a separate destination.
+
+<!-- folder-example: setup -->
 ```sh
-binsith ./samples --output-dir ./reports -s
-binsith ./samples --output-dir ./recursive-reports --recursive -s --jobs 4
+mkdir -p folder-demo/input/nested
+printf 'https://example.org/download\n' > folder-demo/input/url.txt
+printf 'hello\n' > folder-demo/input/plain.txt
+printf '192.0.2.10\n' > folder-demo/input/nested/address.txt
 ```
 
-The destination must be new or empty. Folder scanning writes `manifest.json`,
-`files.jsonl`, `errors.jsonl`, and sharded reports under `results/`. Without `-s`
-or another string-analysis option, indicator counts are `null` (not analyzed).
-Subdirectories are skipped unless `--recursive` is supplied; symlinks and special
-files are skipped. Input and output roots must not contain symlink components.
-Output may be inside the input tree, where it is excluded from discovery.
+Summarize the two top-level files. Subdirectories are excluded by default:
 
-`--jobs` defaults to the available CPU count capped at 4. Positive explicit counts
-are accepted subject to checked queue arithmetic and OS resources. Thread startup
-failure stops setup before discovery. At most N files are active and 2N are queued;
-these bounds are not total memory or temporary-disk quotas. Analysis flags, including ranges and entropy,
-apply independently to every file. Single-file report destinations, JSONL output,
-comparison, hex dumps, indicator export and custom match exit codes are unsupported
-in folder mode. Use a fresh destination for each run; resume is not implemented.
+<!-- folder-example: summary -->
+```sh
+binsith folder-demo/input --output-dir folder-demo/summary -q
+```
 
-File failures continue by default. `--fail-fast` stops discovery and cancels queued
-files after a file or discovery error; limited coverage alone does not trigger it.
-The first Ctrl+C requests cooperative shutdown and preserves published reports.
-A second Ctrl+C exits promptly with best-effort cleanup. Blocked filesystem calls
-may delay cooperative shutdown. An incomplete manifest must not be interpreted as
-a finished inventory, even when reports are present.
+Scan all three files for strings and indicators with four workers:
 
-Folder exit codes are 0 for fully successful completion, 1 for execution failures
-or limited coverage, 2 for setup errors, and 130 for interruption. Human summaries
-and progress use stderr; stdout stays empty. `-q` suppresses the summary and automatic
-progress; `--progress` explicitly enables periodic counter and selected-byte lines. Rich progress
-rendering and throughput estimates are planned separately.
+<!-- folder-example: recursive -->
+```sh
+binsith folder-demo/input --output-dir folder-demo/recursive --recursive -s --jobs 4 -q
+```
+
+Both commands return 0. Summary-only indicator counters are `null`, meaning
+analysis was not requested. The recursive scan has three complete reports and
+two files with actionable indicators. Findings do not establish maliciousness.
+
+To see how limited coverage is reported, deliberately lower the string limit:
+
+<!-- folder-example: limited -->
+```sh
+binsith folder-demo/input --output-dir folder-demo/limited --recursive -s --max-string-bytes 8 -q
+```
+
+This command returns **1**. It still finishes orchestration and retains reports;
+the URL and IP strings exceed the limit and are marked limited. An empty match
+list in a limited report does not establish absence of indicators.
+
+### Locate reports and interpret completion
+
+| Artifact | Purpose |
+| --- | --- |
+| `manifest.json` | Batch configuration, build identity, counters, discovery state and stop reasons |
+| `files.jsonl` | Admissions and terminal outcomes, with links to completed or limited reports |
+| `errors.jsonl` | File, discovery and batch diagnostics |
+| `results/<shard>/<id>.json` | Atomic per-file analysis reports |
+| `.binsith.lock` | Exclusive ownership claim; normally removed after orderly shutdown |
+
+Report IDs derive from lossless relative-path identities, not input contents.
+Use the terminal record's `outcome.report.location` instead of guessing a filename.
+Hard-linked files at distinct paths are separate entries. Display paths are for
+humans; the structured path field preserves native identities. Treat sharding and
+IDs as opaque when consuming reports. Batch artifacts have schema version 1.
+
+After the recursive command completes, list its terminal results:
+
+<!-- folder-example: inspect -->
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+root = Path('folder-demo/recursive')
+manifest = json.loads((root / 'manifest.json').read_text())
+print(manifest['status'], manifest['counters']['complete'])
+for line in (root / 'files.jsonl').read_text().splitlines():
+    record = json.loads(line)
+    if record['record_type'] == 'terminal':
+        outcome = record['outcome']
+        print(outcome['status'], record['display_path'],
+              outcome.get('report', {}).get('location', 'no report'))
+PY
+```
+
+The first line is `complete 3`; three terminal lines follow, in an unspecified
+order. `status: complete` means orchestration finished, **not** that every file
+succeeded. Check failed/limited/discovery-error counters and the process exit code.
+`status: incomplete` means the inventory is unfinished. During execution, the
+manifest is a checkpoint and can lag the journals. Per-file outcomes are
+`complete`, `limited`, `failed`, `skipped` or `cancelled`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Completed without file/discovery failures, cancellations or limited coverage |
+| 1 | Execution failure, limited coverage or unfinished orchestration |
+| 2 | Invalid arguments or setup failure |
+| 130 | Interrupted; takes precedence over other execution failures |
+
+Indicator presence does not change folder exit codes. Zero eligible files is a
+valid successful run; policy skips alone do not imply a failed scan. Counts cover
+observed entries, not an atomic snapshot of a changing filesystem.
+
+### Options and traversal
+
+`--jobs` defaults to available CPUs capped at four. A positive explicit value
+allows up to N active scans and 2N queued entries, subject to OS resources and
+checked arithmetic. These are concurrency bounds, not memory or disk quotas.
+Use fewer workers when storage or memory is constrained; more workers do not
+always increase throughput.
+
+The output directory must be new or empty. It cannot equal or contain the input
+root. It may be inside the input tree, where it is excluded from traversal.
+Input/output root components must not be symlinks or reparse points. Discovery
+skips symlinks and special files; it includes hidden files and follows subdirectories
+only with `--recursive`. Detectable input replacement or mutation fails the file
+and prevents publication of its report; this is not a filesystem snapshot.
+
+Analysis flags apply independently to each file: summary, strings/matching strings,
+category/custom-pattern selection, decoding and string limits, encoding, ranges,
+embedded UTF-16 and entropy. For example, `--offset 4096` fails on files shorter
+than that offset. Custom patterns are validated before output is claimed.
+
+Folder mode rejects single-file destinations (`-j`), JSONL/live output, indicator
+export options, comparison, hex dumps, category listing and custom match/no-match/
+inconclusive exit codes. Folder-only options also require directory input.
+There is no resume, archive extraction, watch mode or cross-file deduplication.
+
+### Progress, interruption and recovery
+
+File failures continue by default. `--fail-fast` stops admission after the first
+file or discovery error, cancels queued work and lets active scans settle. Limited
+coverage alone does not trigger fail-fast; it still makes the final exit code 1.
+
+Human summaries and progress use stderr; stdout stays empty. `-q` suppresses the
+summary and automatic progress. `--progress` explicitly enables progress even with
+`-q` or redirected stderr. Progress uses periodic plain lines with processed,
+active, queued, failed and limited counts plus selected bytes read. Totals remain
+unknown until discovery finishes; file-rate/ETA estimates appear only when enough
+stable observations exist. Extra passes and report writing can continue after
+selected-byte counts stop increasing. Failed optional progress output does not
+invalidate successfully written reports.
+
+The first Ctrl+C requests cooperative shutdown. Published reports are preserved;
+blocked OS calls can delay shutdown. A second interrupt forces prompt exit and may
+leave a stale claim, temporary reports or a torn final journal line. A report can
+also have been published before its terminal journal record was committed. Do not
+infer batch success from report files alone.
+
+Keep an interrupted batch for inspection and rerun into a **fresh destination**.
+Do not remove the claim and reuse that directory as a resume mechanism. Journals
+and atomic report/manifest replacement support inspection after process failure;
+ordinary flushes are not a guarantee of survival through power loss (`fsync`
+durability is not promised).
+
+### Storage, privacy and measured performance
+
+Basic summary/string scanning streams input. Embedded UTF-16 and entropy may
+require a temporary snapshot of each active file's selected range. Allow space
+for concurrent snapshots, reports and journals. Large/deep directory traversal
+also uses a private spool; report and journal growth are not capped by `--jobs`.
+Unix output permissions are restricted, but access controls and storage protection
+remain the operator's responsibility.
+
+Reports and journals can contain local paths, extracted secrets, decoded text and
+surrounding evidence. Keep input, output and temporary storage in an appropriate
+location. BinSith does not execute scanned files or contact extracted addresses.
+
+The current scanner source passes all 28 warm workload/worker cases on the local
+macOS host under the frozen limits. Controlled 10-microsecond per-write-delay
+observations also pass all 28 combinations after one repeat for each of three
+noisy cases. These comparisons include per-file report writing and native batch
+journals; they differ from the published 0.4.2 discarded-output timings above.
+See [warm evidence](devnotes/benchmarks/fs20-no-onepass.md) and
+[controlled-latency evidence](devnotes/benchmarks/fs20-no-onepass-write-latency.md).
+Physical slow-disk/network-volume and native Windows validation remain open.
+Synthetic write delay is not proof of physical-storage performance.

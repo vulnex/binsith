@@ -6,6 +6,8 @@ work. Warm timings and separate resource samples; optional synthetic write laten
 """
 import argparse
 import functools
+import errno
+import shutil
 import tomllib
 import hashlib
 import json
@@ -196,6 +198,28 @@ def storage_measure(function, binary, samples, destination, workers, timeout, fl
     return metric
 
 
+def existing_directory(value):
+    try:
+        path = Path(value).resolve(strict=True)
+        if not path.is_dir():
+            raise ValueError("not a directory")
+        return path
+    except (OSError, ValueError) as error:
+        raise argparse.ArgumentTypeError(f"benchmark work directory: {error}") from error
+
+
+def materialize_input(source, destination):
+    """Prefer links; support data volumes without hardlinks outside timed trials."""
+    try:
+        os.link(source, destination)
+        return 'hardlink'
+    except OSError as error:
+        if error.errno not in (errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise
+        shutil.copyfile(source, destination)
+        return 'copy'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline', type=Path, required=True)
@@ -203,6 +227,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--workers', type=int, nargs='+', default=[1, 2, 4, 8])
     parser.add_argument('--workloads', nargs='+')
+    parser.add_argument('--work-dir', type=existing_directory,
+                        help='existing volume directory for temporary inputs, reports and scratch; defaults to system temp')
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--write-delay-us', type=int, default=0)
@@ -220,12 +246,14 @@ def main():
         parser.error('requires Unix wait4 plus ps/lsof profiling')
     if args.runs < 1 or any(w < 1 for w in args.workers) or not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('positive runs, workers and timeout required')
+    work_parent = args.work_dir or Path(tempfile.gettempdir()).resolve()
     binaries = [str(args.baseline.resolve(strict=True)), str(args.candidate.resolve(strict=True))]
     helper_hash = hashlib.sha256(b''.join(Path(__file__).with_name(name).read_bytes() for name in
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=2, write_delay_us=args.write_delay_us,
+        settings=dict(adapter_version=3, work_directory=str(work_parent),
+                      work_device=work_parent.stat().st_dev, write_delay_us=args.write_delay_us,
                       write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
                       write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
                       workloads=args.workloads, warmup_runs=1, resource_profiling=True,
@@ -242,7 +270,7 @@ def main():
             'External resource totals exclude Python harness; native coordinator is included.',
             'Profile samples never enter timing medians; resource samples can miss transient peaks.',
             'Effective analysis configuration compared; CLI transport options/build provenance excluded; encoding spelling normalized; both pattern fingerprints independently verified against bundled source; entropy tolerance 1e-12.']}
-    with args.output.open('x') as output, tempfile.TemporaryDirectory(prefix='binsith-native-bench-') as temporary:
+    with args.output.open('x') as output, tempfile.TemporaryDirectory(prefix='binsith-native-bench-', dir=work_parent) as temporary:
         root = Path(temporary).resolve()
         source = root / 'source'
         source.mkdir()
@@ -264,13 +292,14 @@ def main():
             inputs = root / name
             inputs.mkdir()
             samples = []
+            materialization = set()
             for sample in originals:
                 path = inputs / sample['path'].name
-                os.link(sample['path'], path)
+                materialization.add(materialize_input(sample['path'], path))
                 samples.append(dict(sample, path=path))
             for workers in args.workers:
                 key = f'{name}_{workers}_workers'
-                scenario = dict(flags=flags, files=len(samples), input_bytes=sum(s['size'] for s in samples),
+                scenario = dict(flags=flags, files=len(samples), input_materialization=sorted(materialization), input_bytes=sum(s['size'] for s in samples),
                     corpus_sha256=hashlib.sha256(json.dumps([(s['size'], s['sha256']) for s in samples]).encode()).hexdigest())
                 for result in results:
                     result['scenarios'][key] = dict(scenario, samples=[])
