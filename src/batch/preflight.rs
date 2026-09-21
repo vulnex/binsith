@@ -13,6 +13,7 @@
 
 use super::cli::{FolderConfiguration, FolderOptions, InputKind};
 use super::{pattern_fingerprint, AnalysisConfiguration, BatchConfiguration, ExitStatus};
+use crate::string_analysis::LoadedPatterns;
 use clap::ArgMatches;
 use regex::Regex;
 use std::{error::Error, fmt, path::Path};
@@ -97,8 +98,16 @@ pub fn prepare<B: SetupBackend>(
     context: SetupContext<'_>,
     backend: &mut B,
 ) -> Result<Option<PreparedBatch<B::Ready>>, SetupError> {
-    let Some(validated) = validate_configuration(folder, matches, &context, |path| {
-        backend.load_patterns(path)
+    let Some(validated) = validate_configuration(folder, matches, &context, |path, retain| {
+        let compiled = backend.load_patterns(path)?;
+        let definitions = compiled
+            .iter()
+            .map(|(name, regex)| (name.clone(), regex.as_str().to_owned()))
+            .collect();
+        Ok(LoadedPatterns {
+            definitions,
+            compiled: if retain { compiled } else { Vec::new() },
+        })
     })?
     else {
         return Ok(None);
@@ -135,7 +144,7 @@ fn validate_configuration(
     folder: &FolderOptions,
     matches: &ArgMatches,
     context: &SetupContext<'_>,
-    load_patterns: impl FnOnce(Option<&str>) -> SetupResult<Vec<(String, Regex)>>,
+    load_patterns: impl FnOnce(Option<&str>, bool) -> SetupResult<LoadedPatterns>,
 ) -> Result<Option<ValidatedConfiguration>, SetupError> {
     let quiet =
         value::<bool>(matches, "quiet").map_err(|e| SetupError::at(SetupStage::Options, e))?;
@@ -156,10 +165,13 @@ fn validate_configuration(
     let pattern_path = matches
         .try_get_one::<String>("patterns")
         .map_err(|e| SetupError::at(SetupStage::Options, e.to_string()))?;
-    let mut patterns = load_patterns(pattern_path.map(String::as_str))
+    let LoadedPatterns {
+        mut definitions,
+        mut compiled,
+    } = load_patterns(pattern_path.map(String::as_str), analysis.strings)
         .map_err(|e| SetupError::at(SetupStage::Patterns, e))?;
     for category in &analysis.categories {
-        if !patterns.iter().any(|(name, _)| name == category) {
+        if !definitions.contains_key(category) {
             return Err(SetupError::at(
                 SetupStage::Patterns,
                 format!("unknown category: {category}"),
@@ -167,7 +179,8 @@ fn validate_configuration(
         }
     }
     if !analysis.categories.is_empty() {
-        patterns.retain(|(name, _)| analysis.categories.contains(name));
+        definitions.retain(|name, _| analysis.categories.contains(name));
+        compiled.retain(|(name, _)| analysis.categories.contains(name));
     }
     let configuration = BatchConfiguration {
         jobs: folder.jobs,
@@ -175,7 +188,7 @@ fn validate_configuration(
         recursive: folder.recursive,
         fail_fast: folder.fail_fast,
         patterns_sha256: pattern_fingerprint(
-            patterns
+            definitions
                 .iter()
                 .map(|(name, pattern)| (name.as_str(), pattern.as_str())),
         ),
@@ -184,7 +197,7 @@ fn validate_configuration(
     Ok(Some(ValidatedConfiguration {
         folder,
         configuration,
-        patterns,
+        patterns: compiled,
     }))
 }
 
@@ -235,7 +248,7 @@ pub fn inspect(
         folder,
         matches,
         &context,
-        crate::string_analysis::load_patterns,
+        crate::string_analysis::load_pattern_configuration,
     )?
     else {
         return Ok(None);

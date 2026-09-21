@@ -2,7 +2,7 @@
 """FS-20 paired external/native adapter using frozen FS-04 corpora and numeric gates.
 
 Analysis reports must be equivalent; native journals/manifest are additional measured
-work. Warm timings and separate resource samples; no cold/slow-storage claim.
+work. Warm timings and separate resource samples; optional synthetic write latency.
 """
 import argparse
 import functools
@@ -167,6 +167,35 @@ def native_measure(binary, samples, destination, workers, timeout, flags, profil
             'resources': monitor.result() if profile else None}
 
 
+def storage_measure(function, binary, samples, destination, workers, timeout, flags, profile, args):
+    if not args.write_delay_us:
+        return function(binary, samples, destination, workers, timeout, flags, profile)
+    audit = destination.parent / 'write-audit'
+    audit.mkdir()
+    environment = dict(DYLD_INSERT_LIBRARIES=str(args.write_delay_library.resolve()),
+        BINSITH_BENCH_TARGET=str(Path(binary).resolve()),
+        BINSITH_BENCH_OUTPUT_ROOT=str(destination.resolve()),
+        BINSITH_BENCH_WRITE_AUDIT=str(audit.resolve()),
+        BINSITH_BENCH_WRITE_DELAY_US=str(args.write_delay_us))
+    previous = {key: os.environ.get(key) for key in environment}
+    try:
+        os.environ.update(environment)
+        metric = function(binary, samples, destination, workers, timeout, flags, profile)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    records = [json.loads(path.read_text()) for path in audit.glob('*.json')]
+    expected = 1 if function is native_measure else len(samples)
+    assert len(records) == expected, 'missing write-delay audit: injection may be unavailable'
+    assert all(r['calls'] > 0 and r['delay_us'] == args.write_delay_us for r in records), 'write delay did not affect every scanner'
+    metric['write_delay'] = dict(processes=len(records), calls=sum(r['calls'] for r in records),
+        requested_bytes=sum(r['requested_bytes'] for r in records), delay_us=args.write_delay_us)
+    return metric
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline', type=Path, required=True)
@@ -176,7 +205,17 @@ def main():
     parser.add_argument('--workloads', nargs='+')
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=120)
+    parser.add_argument('--write-delay-us', type=int, default=0)
+    parser.add_argument('--write-delay-library', type=Path)
     args = parser.parse_args()
+    if args.write_delay_us < 0 or args.write_delay_us > 1000000:
+        parser.error('write delay must be between 0 and 1000000 microseconds')
+    if bool(args.write_delay_us) != bool(args.write_delay_library):
+        parser.error('write delay and library must be supplied together')
+    if args.write_delay_us and (platform.system() != 'Darwin' or not args.write_delay_library.is_file()):
+        parser.error('write injection requires macOS and a compiled slow_output.c library')
+    if args.write_delay_us and os.environ.get('DYLD_INSERT_LIBRARIES'):
+        parser.error('refusing to replace an existing DYLD_INSERT_LIBRARIES setting')
     if not hasattr(os, 'wait4'):
         parser.error('requires Unix wait4 plus ps/lsof profiling')
     if args.runs < 1 or any(w < 1 for w in args.workers) or not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -186,7 +225,9 @@ def main():
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=1, corpus_version=3, runs=args.runs, workers=args.workers,
+        settings=dict(adapter_version=2, write_delay_us=args.write_delay_us,
+                      write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
+                      write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
                       workloads=args.workloads, warmup_runs=1, resource_profiling=True,
                       patterns_source_sha256=hashlib.sha256(Path('src/regex_patterns.toml').read_bytes()).hexdigest()))
     results = [dict(common, binary_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
@@ -195,7 +236,7 @@ def main():
     gates = json.loads(Path('devnotes/benchmarks/folder-performance-gates.json').read_text())
     evidence = {'run_state': 'running', 'expected_scenarios': len(args.workers) * (len(args.workloads) if args.workloads else 7),
         'baseline': results[0], 'candidate': results[1], 'gates': gates,
-        'limitations': ['Warm/uncontrolled cache only; cold/slow-output storage matrix still pending.',
+        'limitations': ['Warm/uncontrolled cache only; optional synthetic per-write latency is not a physical slow disk, bandwidth cap, fsync delay, or cold-cache measurement.',
             'Equivalent analysis reports; native journals/manifest are additional candidate work included in elapsed time.',
             'Baseline first-report observation at child exit; native atomic report observed by 1ms filesystem polling.',
             'External resource totals exclude Python harness; native coordinator is included.',
@@ -240,8 +281,8 @@ def main():
                     for index in ([0, 1] if iteration % 2 == 0 else [1, 0]):
                         with tempfile.TemporaryDirectory(dir=root, prefix='output-') as folder:
                             destination = Path(folder) / 'reports'
-                            metric = (measure if index == 0 else native_measure)(
-                                binaries[index], samples, destination, workers, args.timeout, flags, profiling)
+                            metric = storage_measure(measure if index == 0 else native_measure,
+                                binaries[index], samples, destination, workers, args.timeout, flags, profiling, args)
                             signature = analysis_signature(destination, samples, index == 1)
                             if reference is None:
                                 reference = signature

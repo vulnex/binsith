@@ -237,22 +237,40 @@ impl Run {
     }
 }
 
-pub fn load_patterns(
+pub(crate) struct LoadedPatterns {
+    pub definitions: std::collections::BTreeMap<String, String>,
+    pub compiled: Vec<(String, Regex)>,
+}
+
+/// Validate every expression, retaining search machinery only when it is needed.
+/// Dropping each summary-only expression before compiling the next bounds the
+/// live compiled set without weakening regex syntax or compilation-size checks.
+pub(crate) fn load_pattern_configuration(
     path: Option<&str>,
-) -> Result<Vec<(String, Regex)>, Box<dyn std::error::Error>> {
+    retain: bool,
+) -> Result<LoadedPatterns, Box<dyn std::error::Error>> {
     let source = match path {
         Some(path) => std::fs::read_to_string(path)?,
         None => include_str!("regex_patterns.toml").to_owned(),
     };
-    let patterns: std::collections::BTreeMap<String, String> = toml::from_str(&source)?;
-    patterns
-        .into_iter()
-        .map(|(name, pattern)| {
-            Regex::new(&pattern)
-                .map(|regex| (name.clone(), regex))
-                .map_err(|e| format!("invalid pattern {name}: {e}").into())
-        })
-        .collect()
+    let definitions: std::collections::BTreeMap<String, String> = toml::from_str(&source)?;
+    let mut compiled = Vec::new();
+    for (name, expression) in &definitions {
+        let regex = Regex::new(expression).map_err(|e| format!("invalid pattern {name}: {e}"))?;
+        if retain {
+            compiled.push((name.clone(), regex));
+        }
+    }
+    Ok(LoadedPatterns {
+        definitions,
+        compiled,
+    })
+}
+
+pub fn load_patterns(
+    path: Option<&str>,
+) -> Result<Vec<(String, Regex)>, Box<dyn std::error::Error>> {
+    Ok(load_pattern_configuration(path, true)?.compiled)
 }
 
 fn base64_shape(text: &str) -> bool {

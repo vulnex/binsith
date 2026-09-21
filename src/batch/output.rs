@@ -31,6 +31,20 @@ use tempfile::NamedTempFile;
 
 const CLAIM_FILE: &str = ".binsith.lock";
 
+// Coalesce serde's small writes without retaining a whole (potentially large)
+// record. Always finish the buffer before the caller's commit boundary, and
+// discard it on error so Drop cannot retry a failed or partial write.
+fn write_json_line(output: impl Write, value: &impl serde::Serialize) -> io::Result<()> {
+    let mut buffered = io::BufWriter::with_capacity(8192, output);
+    let result = (|| {
+        serde_json::to_writer(&mut buffered, value)?;
+        buffered.write_all(b"\n")?;
+        buffered.flush()
+    })();
+    let _ = buffered.into_parts();
+    result
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputStage {
     Claim,
@@ -551,8 +565,7 @@ impl OwnedJournal {
                 return Err(error);
             }
         }
-        serde_json::to_writer(&mut self.file, value)?;
-        self.file.write_all(b"\n")?;
+        write_json_line(&mut self.file, value)?;
         #[cfg(test)]
         faults::hit(Point::Journal(kind, Step::Flush))?;
         self.file.flush()?;
@@ -609,8 +622,7 @@ impl OutputClaim {
             .tempfile_in(self.root())?;
         #[cfg(test)]
         faults::hit(Point::ManifestWrite)?;
-        serde_json::to_writer(&mut temporary, manifest)?;
-        temporary.write_all(b"\n")?;
+        write_json_line(&mut temporary, manifest)?;
         #[cfg(test)]
         faults::hit(Point::ManifestFlush)?;
         temporary.flush()?;
@@ -647,6 +659,57 @@ impl OutputClaim {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_line_partial_write_error_is_not_retried_on_drop() {
+        struct FailingWriter(usize);
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                if self.0 == 1 {
+                    Ok(1)
+                } else {
+                    Err(io::Error::other("full"))
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                panic!("must not flush after a failed write")
+            }
+        }
+        let mut output = FailingWriter(0);
+        assert!(write_json_line(&mut output, &serde_json::json!({"record": 1})).is_err());
+        assert_eq!(output.0, 2, "Drop must not retry the failed write");
+    }
+
+    #[test]
+    fn json_lines_are_complete_and_flushed_before_returning() {
+        #[derive(Default)]
+        struct Observer {
+            bytes: Vec<u8>,
+            flushed: bool,
+        }
+        impl Write for Observer {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.flushed = false;
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushed = true;
+                Ok(())
+            }
+        }
+        for size in [4, 32_768] {
+            let value = serde_json::json!({"path": "x".repeat(size)});
+            let mut output = Observer::default();
+            write_json_line(&mut output, &value).unwrap();
+            assert!(output.flushed);
+            let mut expected = serde_json::to_vec(&value).unwrap();
+            expected.push(b'\n');
+            assert_eq!(output.bytes, expected);
+        }
+    }
+
     fn fixture() -> (tempfile::TempDir, ResolvedRoots) {
         let temp = tempfile::tempdir().unwrap();
         let base = fs::canonicalize(temp.path()).unwrap();
