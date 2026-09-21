@@ -1,13 +1,36 @@
 """Adapter regression checks: retain semantic differences and verify fingerprints."""
 import copy
+import argparse
+import errno
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
 import unittest
 from benchmark_native_folder import (
     ANALYSIS_KEYS, BATCH_PATTERN_FORMAT, LEGACY_PATTERN_FORMAT,
-    assert_equivalent, normalize_analysis, pattern_hashes,
+    assert_equivalent, normalize_analysis, pattern_hashes, existing_directory, materialize_input,
 )
 
 
 class NativeAdapterTests(unittest.TestCase):
+    def test_volume_inputs_preserve_bytes_without_hardlink_support(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / 'source'
+            source.write_bytes(bytes(range(256)))
+            self.assertEqual(existing_directory(root), root)
+            with self.assertRaises(argparse.ArgumentTypeError):
+                existing_directory(source)
+            with self.assertRaises(argparse.ArgumentTypeError):
+                existing_directory(root / 'missing')
+            with patch('benchmark_native_folder.os.link', side_effect=OSError(errno.ENOTSUP, 'unsupported')):
+                self.assertEqual(materialize_input(source, root / 'copy'), 'copy')
+            self.assertEqual((root / 'copy').read_bytes(), source.read_bytes())
+            with patch('benchmark_native_folder.os.link', side_effect=OSError(errno.ENOSPC, 'full')):
+                with self.assertRaises(OSError):
+                    materialize_input(source, root / 'full')
+            self.assertFalse((root / 'full').exists())
+
     def test_both_fingerprint_formats_are_verified_before_normalization(self):
         legacy, native = pattern_hashes(True)
         self.assertEqual(legacy, '63f03ec8427708e3cbcf03a4d4d63b1ecd6b4058c4a45fd8475386e5478c3699')

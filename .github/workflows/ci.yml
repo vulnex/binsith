@@ -34,6 +34,9 @@ jobs:
         run: |
           python tools/check_folder_progress.py --binary target/debug/binsith
           python tools/check_folder_progress.py --binary target/release/binsith
+      - name: README folder examples
+        if: runner.os != 'Windows'
+        run: python tools/check_folder_examples.py --output target/folder-examples.json
       - name: Folder benchmark and scale validator contracts
         if: runner.os != 'Windows'
         run: python -m unittest discover -s tools -p 'test_folder*.py'
@@ -45,6 +48,7 @@ jobs:
         with:
           name: filesystem-evidence-${{ matrix.os }}
           path: |
+            target/folder-examples.json
             target/fs19-filesystems.json
             target/fs19-windows-*.json
           if-no-files-found: warn
