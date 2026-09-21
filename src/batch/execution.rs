@@ -1,7 +1,6 @@
 //! Bounded worker execution. The coordinator owns discovery, journals and stop state;
 //! the worker owns only its checked input, scan state and temporary report.
 use super::{
-    cli::ProgressMode,
     coordinator::{Coordinator, StopReason},
     discovery::{Discovery, DiscoveryEvent},
     input::Candidate,
@@ -29,6 +28,7 @@ pub struct ExecutionError {
 pub struct ExecutionResult {
     pub status: ExitStatus,
     pub counters: Counters,
+    pub batch_status: BatchStatus,
     /// Source bytes consumed, including partial scans; extra analysis passes are excluded.
     pub selected_bytes_read: u64,
 }
@@ -229,7 +229,10 @@ pub fn run(
     std::thread::scope(|scope| {
         // Terminal events are lossless and bounded independently from byte progress.
         // Cap allocation even if an excessive --jobs request fails during thread creation.
-        let (results, events) = mpsc::sync_channel(jobs.min(64));
+        let event_capacity = jobs.min(64);
+        #[cfg(test)]
+        let event_capacity = super::faults::event_capacity(event_capacity);
+        let (results, events) = mpsc::sync_channel(event_capacity);
         let worker_cancellation = cancellation.child();
         let mut sends = Vec::new();
         let mut workers = Vec::new();
@@ -269,6 +272,8 @@ pub fn run(
                                 .unwrap_or_else(|_| {
                                     ScanResult::Fatal("worker_panic", "scan worker panicked".into())
                                 });
+                            #[cfg(test)]
+                            super::faults::hit(super::faults::Point::BeforeTerminalSend).unwrap();
                             if results
                                 .send((
                                     worker_id,
@@ -283,6 +288,8 @@ pub fn run(
                             {
                                 break;
                             }
+                            #[cfg(test)]
+                            super::faults::hit(super::faults::Point::AfterTerminalSend).unwrap();
                         }
                     })
             };
@@ -306,6 +313,9 @@ pub fn run(
         }
         drop(results);
         let mut selected_bytes_read = 0_u64;
+        let started = Instant::now();
+        let mut progress_display =
+            super::progress::Progress::new(io::stderr(), batch.folder().progress);
         let execution = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut discovery = Discovery::new(
                 batch.roots(),
@@ -316,7 +326,7 @@ pub fn run(
             let mut queue = VecDeque::new();
             let mut active = vec![None; jobs];
             let mut ended = false;
-            let mut progress = Instant::now();
+            progress_display.update(coordinator.manifest(), 0, started.elapsed(), true);
             loop {
                 if cancellation.is_cancelled()
                     && !coordinator
@@ -419,6 +429,12 @@ pub fn run(
                         }
                     }
                 }
+                #[cfg(test)]
+                if active.iter().all(Option::is_some)
+                    && queue.len() == batch.configuration().work_queue_capacity
+                {
+                    super::faults::hit(super::faults::Point::QueueSaturated)?;
+                }
                 if active.iter().any(Option::is_some) {
                     let wait = if !ended && queue.len() < batch.configuration().work_queue_capacity
                     {
@@ -470,7 +486,10 @@ pub fn run(
                                 )?,
                                 ScanResult::Fatal(code, message) => {
                                     worker_cancellation.cancel();
-                                    eprintln!("binsith: fatal batch error: {message:?}");
+                                    let _ = std::io::Write::write_fmt(
+                                        &mut io::stderr(),
+                                        format_args!("binsith: fatal batch error: {message:?}\n"),
+                                    );
                                     coordinator.diagnostic(diagnostic(
                                         &batch_id,
                                         None,
@@ -500,17 +519,16 @@ pub fn run(
                     return Err("scan worker terminated unexpectedly".into());
                 }
                 coordinator.checkpoint_if_due()?;
-                if batch.folder().progress != ProgressMode::Disabled
-                    && progress.elapsed() >= Duration::from_secs(1)
-                {
-                    let c = &coordinator.manifest().counters;
-                    eprintln!(
-                        "Batch: {} active, {} queued, {} complete, {} limited, {} failed; {} selected bytes read",
-                        c.active, c.queued, c.complete, c.limited, c.failed,
-                        progress_slots.iter().fold(selected_bytes_read, |total, slot| total.saturating_add(slot.load(Ordering::Relaxed)))
-                    );
-                    progress = Instant::now();
-                }
+                progress_display.update(
+                    coordinator.manifest(),
+                    progress_slots
+                        .iter()
+                        .fold(selected_bytes_read, |total, slot| {
+                            total.saturating_add(slot.load(Ordering::Relaxed))
+                        }),
+                    started.elapsed(),
+                    false,
+                );
                 if ended && active.iter().all(Option::is_none) && queue.is_empty() {
                     // Check stop state once more before the final completion checkpoint.
                     if cancellation.is_cancelled() {
@@ -543,9 +561,28 @@ pub fn run(
             Ok(ExecutionResult {
                 status,
                 counters: coordinator.manifest().counters.clone(),
+                batch_status: coordinator.manifest().status,
                 selected_bytes_read,
             })
         });
+        progress_display.update(
+            coordinator.manifest(),
+            progress_slots
+                .iter()
+                .fold(selected_bytes_read, |total, slot| {
+                    total.saturating_add(slot.load(Ordering::Relaxed))
+                }),
+            started.elapsed(),
+            true,
+        );
+        if execution.is_err() && batch.folder().human_summary {
+            super::progress::summary(
+                io::stderr(),
+                BatchStatus::Incomplete,
+                &coordinator.manifest().counters,
+                batch.roots().output(),
+            );
+        }
         execution.map_err(|e| {
             // Best effort only: a poisoned/unusable journal must never be retried.
             let _ = coordinator.diagnostic(diagnostic(
@@ -573,3 +610,6 @@ mod regex_bench;
 
 #[cfg(test)]
 mod pool_tests;
+
+#[cfg(test)]
+mod shutdown_tests;
