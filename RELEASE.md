@@ -17,6 +17,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 cargo test --release --locked
 cargo build --release --locked
+python3 tools/check_fuzz_alignment.py
 python3 tools/check_export_compatibility.py
 python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-rc.json
 ```

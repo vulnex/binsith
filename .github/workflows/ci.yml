@@ -60,6 +60,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check CLI and fuzz dependency alignment
+        run: |
+          python tools/check_fuzz_alignment.py
+          python -m unittest discover -s tools -p 'test_fuzz*.py'
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
       - run: mkdir -p fuzz/corpus/strings && cp fuzz/seeds/strings/* fuzz/corpus/strings/

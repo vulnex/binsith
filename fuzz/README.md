@@ -3,7 +3,10 @@
 This separate Cargo workspace compiles the production string-analysis and validation
 sources directly. It does not change the CLI or require a new public library API.
 Its lockfile starts from the CLI's resolved dependencies, adding only the fuzzing
-runtime and build dependencies. Keep shared dependencies aligned when updating.
+runtime and build dependencies. Shared direct dependency requirements, feature
+flags and locked packages are checked by `python3 tools/check_fuzz_alignment.py`
+and the fuzz CI job. Run that check after dependency changes: matching version
+numbers alone does not establish the same enabled regex engines.
 
 The `strings` target varies encoding, embedded UTF-16 extraction, matching-only
 mode, decoding, minimum length, string retention, decode budget, and nesting depth.
@@ -28,6 +31,7 @@ install nightly alongside stable (do not change the default toolchain), and inst
 cargo-fuzz locally inside the ignored build directory:
 
 ```sh
+python3 tools/check_fuzz_alignment.py
 rustup toolchain install nightly --profile minimal
 cargo install cargo-fuzz --version 0.13.2 --locked --root target/fuzz-tools
 mkdir -p fuzz/corpus/strings
