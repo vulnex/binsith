@@ -24,6 +24,11 @@ jobs:
           python-version: '3.12'
       - name: Folder filesystem identities and volume capabilities
         run: python tools/check_folder_filesystems.py --output target/fs19-filesystems.json
+      - name: Windows ACL, junction, long-path and console behavior
+        if: runner.os == 'Windows'
+        run: |
+          python tools/check_folder_windows.py --binary target/debug/binsith.exe --output target/fs19-windows-debug.json
+          python tools/check_folder_windows.py --binary target/release/binsith.exe --output target/fs19-windows-release.json
       - name: Native terminal and closed-pipe behavior
         if: runner.os != 'Windows'
         run: |
@@ -39,7 +44,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: filesystem-evidence-${{ matrix.os }}
-          path: target/fs19-filesystems.json
+          path: |
+            target/fs19-filesystems.json
+            target/fs19-windows-*.json
           if-no-files-found: warn
       - name: Bounded CLI stress and benchmark smoke
         if: runner.os == 'Linux'
