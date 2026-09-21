@@ -292,6 +292,7 @@ fn signal_child(base: &Path, scenario: &str) {
     let batch = fixture(base);
     let token = CancellationToken::default();
     let handler = crate::batch::signals::InterruptHandler::install(token.clone()).unwrap();
+    assert!(crate::batch::signals::InterruptHandler::install(token.clone()).is_err());
     let slow = Arc::new(Gate::default());
     let mut plan =
         Plan::new(Point::ReportWrite, 4, Action::Gate(slow.clone())).with_event_capacity(1);

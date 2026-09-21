@@ -39,6 +39,8 @@ struct CancellationState {
 pub struct CancellationToken(Arc<CancellationState>);
 impl CancellationToken {
     pub fn cancel(&self) {
+        // Called from the Unix signal handler: keep this operation atomic-only,
+        // without allocation, locks, logging, or other potentially blocking work.
         self.0.cancelled.store(true, Ordering::Relaxed);
     }
     pub fn is_cancelled(&self) -> bool {

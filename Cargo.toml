@@ -6,7 +6,9 @@ license = "Apache-2.0"
 include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "build.rs", "README.md", "CHANGELOG.md", "RELEASE.md", "LICENSE", "assets/branding/binsith-logo.png"]
 
 [dependencies]
-regex = "1.5"
+# Keep Unicode and the other search optimizations, but omit the one-pass DFA.
+# FS-20 heap profiles and acceptance measurements are recorded in devnotes.
+regex = { version = "1.5", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-backtrack", "perf-inline", "perf-literal"] }
 toml = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -17,13 +19,16 @@ base64 = "0.21"
 clap = { version = "4.2", features = ["derive"] }
 tempfile = "3"
 url = "2.5"
-ctrlc = "3.5"
 
 [build-dependencies]
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
+signal-hook = { version = "0.4", default-features = false }
+
+[target.'cfg(not(unix))'.dependencies]
+ctrlc = "3.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
