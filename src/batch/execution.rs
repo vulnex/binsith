@@ -107,7 +107,7 @@ fn scan(
         "strings_enabled": config.strings, "effective_encoding": config.encoding,
         "decoding_enabled": config.strings && !config.no_decode && config.max_decode_bytes > 0 && config.decode_depth > 0,
         "patterns_sha256": batch.configuration().patterns_sha256,
-        "patterns_hash_format": "SHA256 of compact JSON array of sorted [name, expression] pairs after category filtering"
+        "patterns_hash_format": "SHA256 of binsith:patterns:v1\\0 then u64LE byte length and UTF-8 bytes for each sorted name and expression after category filtering"
     });
     let request = ScanRequest {
         display_path: &display,
@@ -254,18 +254,28 @@ pub fn run(
                     .spawn_scoped(scope, move || {
                         #[cfg(test)]
                         let _faults = super::faults::install(faults);
-                        // Clones share compiled expressions but give each worker its own
-                        // regex search handles. See the recorded FS-14 measurement.
-                        let patterns = batch.patterns().to_vec();
+                        // Allocate search handles only when this worker scans strings.
+                        // A sole worker can reuse the preflight handles; concurrent
+                        // workers retain independent handles (FS-14 measurement).
+                        let mut owned_patterns = None;
                         while let Ok(work) = receive.recv() {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let patterns = if !batch.configuration().analysis.strings {
+                                        &[][..]
+                                    } else if jobs == 1 {
+                                        batch.patterns()
+                                    } else {
+                                        owned_patterns
+                                            .get_or_insert_with(|| batch.patterns().to_vec())
+                                            .as_slice()
+                                    };
                                     scan(
                                         &work.candidate,
                                         batch,
                                         &output,
                                         &token,
-                                        &patterns,
+                                        patterns,
                                         &progress,
                                     )
                                 }))
