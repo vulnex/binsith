@@ -921,6 +921,28 @@ mod tests {
         }
     }
     #[test]
+    fn checkpoints_replace_manifest_while_readers_hold_previous_snapshots() {
+        use std::io::Read;
+
+        let (_temp, output, mut coordinator, _fault) = fixture();
+        let path = output.root().join("manifest.json");
+        let original = fs::read(&path).unwrap();
+        let mut reader = fs::File::open(&path).unwrap();
+        coordinator.begin_discovery().unwrap();
+        let current = fs::read(&path).unwrap();
+        assert_ne!(current, original);
+        let mut second_reader = fs::File::open(&path).unwrap();
+        coordinator.checkpoint().unwrap();
+        let mut retained = Vec::new();
+        reader.read_to_end(&mut retained).unwrap();
+        assert_eq!(retained, original);
+        retained.clear();
+        second_reader.read_to_end(&mut retained).unwrap();
+        assert_eq!(retained, current);
+        assert_eq!(fs::read(&path).unwrap(), current);
+    }
+
+    #[test]
     fn due_checkpoints_record_live_state_without_sleeping() {
         let (_temp, output, mut coordinator, _fault) = fixture();
         coordinator.begin_discovery().unwrap();
