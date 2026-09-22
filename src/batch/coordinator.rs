@@ -148,6 +148,7 @@ struct Entry {
 pub struct Coordinator<S: JournalStore = DiskStore> {
     store: S,
     manifest: Manifest,
+    checkpointed_counters: Counters,
     pending: HashMap<u64, Entry>,
     next_id: u64,
     next_sequence: u64,
@@ -233,9 +234,11 @@ impl<S: JournalStore> Coordinator<S> {
             stage: "initialize",
             message: e.to_string(),
         })?;
+        let checkpointed_counters = manifest.counters.clone();
         Ok(Self {
             store,
             manifest,
+            checkpointed_counters,
             pending: HashMap::new(),
             next_id: 1,
             next_sequence: 1,
@@ -308,14 +311,19 @@ impl<S: JournalStore> Coordinator<S> {
             return self.invalid(error);
         }
         self.storage("checkpoint", |store| store.checkpoint(&snapshot))?;
+        self.checkpointed_counters = snapshot.counters;
         self.last_checkpoint = Instant::now();
         Ok(())
     }
     /// Call from the coordinator event loop as well as on events, so idle workers
     /// do not prevent a periodic checkpoint. The default interval is one second.
+    /// Only counters change between mandatory lifecycle checkpoints; rewriting an
+    /// identical manifest on idle ticks adds storage work without fresher state.
     pub fn checkpoint_if_due(&mut self) -> Result<bool> {
         self.ready()?;
-        if self.last_checkpoint.elapsed() >= Duration::from_secs(1) {
+        if self.manifest.counters != self.checkpointed_counters
+            && self.last_checkpoint.elapsed() >= Duration::from_secs(1)
+        {
             self.checkpoint()?;
             Ok(true)
         } else {
@@ -955,6 +963,44 @@ mod tests {
                 .unwrap();
         assert_eq!(saved.counters.active, 1);
         assert_eq!(saved.status, BatchStatus::Incomplete);
+        saved.validate().unwrap();
+    }
+
+    #[test]
+    fn idle_timer_does_not_hide_explicit_checkpoint_failure() {
+        let (_temp, _output, mut coordinator, fault) = fixture();
+        coordinator.begin_discovery().unwrap();
+        coordinator.last_checkpoint = Instant::now() - Duration::from_secs(2);
+        fault.set(Some(Fault::Checkpoint));
+        assert!(!coordinator.checkpoint_if_due().unwrap());
+        assert!(matches!(fault.get(), Some(Fault::Checkpoint)));
+        assert!(coordinator.checkpoint().is_err());
+        assert!(fault.get().is_none());
+        assert!(coordinator.checkpoint_if_due().is_err());
+    }
+
+    #[test]
+    fn due_checkpoints_skip_unchanged_state_but_record_new_counters() {
+        let (_temp, output, mut coordinator, _fault) = fixture();
+        coordinator.begin_discovery().unwrap();
+        let id = coordinator.admit(path(), "sample".into()).unwrap();
+        coordinator.activate(id).unwrap();
+        coordinator.last_checkpoint = Instant::now() - Duration::from_secs(2);
+        assert!(coordinator.checkpoint_if_due().unwrap());
+        let previous = fs::read(output.root().join("manifest.json")).unwrap();
+        coordinator.last_checkpoint = Instant::now() - Duration::from_secs(2);
+        assert!(!coordinator.checkpoint_if_due().unwrap());
+        assert_eq!(
+            fs::read(output.root().join("manifest.json")).unwrap(),
+            previous
+        );
+        // A new admission must still be checkpointed immediately when due.
+        coordinator.admit(path(), "next".into()).unwrap();
+        let saved: Manifest =
+            serde_json::from_slice(&fs::read(output.root().join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved.counters.queued, 1);
+        assert_eq!(saved.counters.active, 1);
         saved.validate().unwrap();
     }
 }

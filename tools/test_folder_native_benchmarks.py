@@ -10,10 +10,27 @@ import unittest
 from benchmark_native_folder import (
     ANALYSIS_KEYS, BATCH_PATTERN_FORMAT, LEGACY_PATTERN_FORMAT,
     assert_equivalent, normalize_analysis, pattern_hashes, existing_directory, materialize_input,
+    has_published_report,
 )
 
 
 class NativeAdapterTests(unittest.TestCase):
+    def test_first_report_requires_publication_not_pending_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertFalse(has_published_report(root))
+            shard = root / 'results' / 'ab'
+            shard.mkdir(parents=True)
+            pending = shard / '.pending-fixture.json'
+            pending.write_text('{"incomplete":')
+            self.assertFalse(has_published_report(root))
+            # A directory ending in .json is not a report either.
+            (shard / 'directory.json').mkdir()
+            self.assertFalse(has_published_report(root))
+            pending.write_text('{}')
+            pending.rename(shard / ('ab' + '0' * 62 + '.json'))
+            self.assertTrue(has_published_report(root))
+
     @unittest.skipIf(os.name == 'nt', 'executable fixture uses a POSIX shebang')
     def test_timed_baseline_places_scanner_scratch_on_selected_volume(self):
         import hashlib
