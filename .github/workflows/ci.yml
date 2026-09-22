@@ -29,6 +29,13 @@ jobs:
         run: |
           python tools/check_folder_windows.py --binary target/debug/binsith.exe --output target/fs19-windows-debug.json
           python tools/check_folder_windows.py --binary target/release/binsith.exe --output target/fs19-windows-release.json
+      - name: Windows repeated console events with blocked report writers
+        if: runner.os == 'Windows'
+        run: |
+          python tools/check_folder_windows_shutdown.py --profile debug --output target/fs19-windows-shutdown-debug.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_folder_windows_shutdown.py --profile release --output target/fs19-windows-shutdown-release.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native terminal and closed-pipe behavior
         if: runner.os != 'Windows'
         run: |
