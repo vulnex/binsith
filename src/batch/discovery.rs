@@ -85,7 +85,9 @@ fn native_path(bytes: Vec<u8>) -> io::Result<PathBuf> {
             ));
         }
         let units: Vec<_> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|x| u16::from_le_bytes([x[0], x[1]]))
             .collect();
         Ok(OsString::from_wide(&units).into())

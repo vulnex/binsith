@@ -179,13 +179,21 @@ mod tests {
         let (_temp, base, input) = fixture();
         fs::create_dir(input.join("child")).unwrap();
         fs::write(base.join("file"), b"keep").unwrap();
+        // Joining onto a Windows verbatim path normalizes `..` before the
+        // resolver sees it. Preserve the literal missing-parent traversal.
+        let mut missing_parent = base.join("missing").into_os_string();
+        missing_parent.push(format!("{0}..{0}out", std::path::MAIN_SEPARATOR));
+        let missing_parent = PathBuf::from(missing_parent);
+        assert!(missing_parent
+            .components()
+            .any(|c| c == Component::ParentDir));
         for output in [
             input.clone(),
             base.clone(),
             input.join("child/.."),
             base.join("file"),
             base.join("file/child"),
-            base.join("missing/../out"),
+            missing_parent,
         ] {
             assert!(resolve_roots(&input, &output).is_err(), "{output:?}");
         }
