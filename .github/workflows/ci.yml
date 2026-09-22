@@ -45,7 +45,6 @@ jobs:
         if: runner.os != 'Windows'
         run: python tools/check_folder_examples.py --output target/folder-examples.json
       - name: Folder benchmark and scale validator contracts
-        if: runner.os != 'Windows'
         run: python -m unittest discover -s tools -p 'test_folder*.py'
       - name: JSON and CSV standard-consumer compatibility
         run: python tools/check_export_compatibility.py

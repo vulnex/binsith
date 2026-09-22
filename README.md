@@ -739,6 +739,10 @@ Native folder output on macOS FAT32 volumes is currently unsupported: AppleDoubl
 metadata and changing file identities can cause output-claim or ownership checks
 to fail. Do not delete existing output to bypass those checks. See the
 [USB compatibility findings](devnotes/benchmarks/fs20-usb-fat32-1cb5e29/README.md).
+A tested alternative is to read inputs from FAT32 while writing reports and
+temporary snapshots to APFS. Select an APFS path with `--output-dir` and keep
+`TMPDIR` on APFS. Hidden AppleDouble `._*` files are scanned as ordinary inputs;
+they are not silently excluded. [Validation](devnotes/benchmarks/fs23-qualification-0bc38ff/README.md).
 
 Analysis flags apply independently to each file: summary, strings/matching strings,
 category/custom-pattern selection, decoding and string limits, encoding, ranges,
@@ -766,8 +770,10 @@ selected-byte counts stop increasing. Failed optional progress output does not
 invalidate successfully written reports.
 
 The first Ctrl+C requests cooperative shutdown. Published reports are preserved;
-blocked OS calls can delay shutdown. A second interrupt forces prompt exit and may
-leave a stale claim, temporary reports or a torn final journal line. A report can
+blocked OS calls can delay shutdown. A second interrupt requests process termination
+without orderly cleanup, but a kernel-blocked filesystem operation can still delay
+process exit until the operation is released. It may leave a stale claim, temporary
+reports or a torn final journal line. A report can
 also have been published before its terminal journal record was committed. Do not
 infer batch success from report files alone.
 
