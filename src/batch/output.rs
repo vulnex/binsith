@@ -617,9 +617,23 @@ impl OutputClaim {
         let destination = self.root().join("manifest.json");
         #[cfg(test)]
         faults::hit(Point::ManifestCreate)?;
+        #[cfg(not(windows))]
         let mut temporary = tempfile::Builder::new()
             .prefix(".manifest-")
             .tempfile_in(self.root())?;
+        // Use normal file attributes: Windows checkpoints are published through
+        // std::fs::rename, rather than tempfile's attribute-clearing persist.
+        #[cfg(windows)]
+        let mut temporary =
+            tempfile::Builder::new()
+                .prefix(".manifest-")
+                .make_in(self.root(), |path| {
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(path)
+                })?;
         #[cfg(test)]
         faults::hit(Point::ManifestWrite)?;
         write_json_line(&mut temporary, manifest)?;
@@ -646,12 +660,19 @@ impl OutputClaim {
                 faults::hit(Point::FinalManifestReplace)?;
             }
         }
-        let result = if previous.is_some() {
-            temporary.persist(destination)
+        if previous.is_some() {
+            // tempfile uses MoveFileExW, which rejects an open destination even
+            // when readers share deletion. std also tries FileRenameInfoEx with
+            // POSIX semantics, so readers can finish on the previous snapshot.
+            #[cfg(windows)]
+            fs::rename(temporary.path(), &destination)?;
+            #[cfg(not(windows))]
+            temporary.persist(destination).map_err(|e| e.error)?;
         } else {
-            temporary.persist_noclobber(destination)
-        };
-        result.map_err(|e| e.error)?;
+            temporary
+                .persist_noclobber(destination)
+                .map_err(|e| e.error)?;
+        }
         Ok(identity)
     }
 }
