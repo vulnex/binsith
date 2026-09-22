@@ -2,6 +2,7 @@
 import copy
 import argparse
 import errno
+import os
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -13,6 +14,31 @@ from benchmark_native_folder import (
 
 
 class NativeAdapterTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'executable fixture uses a POSIX shebang')
+    def test_timed_baseline_places_scanner_scratch_on_selected_volume(self):
+        import hashlib
+        import json
+        from benchmark_folder import measure
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            binary = root / 'scanner'
+            binary.write_text("""#!/usr/bin/env python3
+import hashlib, json, pathlib, sys, tempfile
+source = pathlib.Path(sys.argv[1])
+body = {'file_summary': {'size_bytes': source.stat().st_size,
+        'sha256': hashlib.sha256(source.read_bytes()).hexdigest()},
+        'scratch_directory': tempfile.gettempdir()}
+pathlib.Path(sys.argv[-1]).write_text(json.dumps(body))
+""")
+            binary.chmod(0o700)
+            source = root / 'sample'
+            source.write_bytes(b'synthetic')
+            sample = dict(path=source, size=9, sha256=hashlib.sha256(b'synthetic').hexdigest())
+            destination = root / 'reports'
+            measure(str(binary), [sample], destination, 1, 10, ['-i'])
+            body = json.loads((destination / '00000000.json').read_text())
+            self.assertEqual(Path(body['scratch_directory']).resolve(), root / 'scratch')
+
     def test_volume_inputs_preserve_bytes_without_hardlink_support(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

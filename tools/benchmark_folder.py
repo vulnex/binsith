@@ -94,7 +94,7 @@ def measure(binary, samples, destination, workers, timeout, flags, profile=False
                     monitor.unregister(child.pid)
             elapsed, rss = time.perf_counter() - began, None
         else:
-            elapsed, rss = timed_process(command, timeout)
+            elapsed, rss = timed_process(command, timeout, env=environment)
         # Child exit follows atomic publication. This is a conservative observable
         # first-report latency, not instrumentation of the internal commit instant.
         return report, elapsed, rss, time.perf_counter() - start
