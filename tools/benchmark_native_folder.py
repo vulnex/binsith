@@ -115,6 +115,11 @@ def assert_equivalent(before, after):
                for key, value in after[1].items()), 'summary entropy differs'
 
 
+def has_published_report(destination):
+    # pathlib globs include dotfiles: .pending-*.json exists before publication.
+    return any(path.is_file() for path in (destination / 'results').glob('*/[!.]*.json'))
+
+
 def native_measure(binary, samples, destination, workers, timeout, flags, profile):
     scratch = destination.parent / 'scratch'
     scratch.mkdir()
@@ -126,7 +131,7 @@ def native_measure(binary, samples, destination, workers, timeout, flags, profil
     start = time.perf_counter()
     def watch():
         while not finished.wait(.001):
-            if next((destination / 'results').glob('*/*.json'), None) is not None:
+            if has_published_report(destination):
                 first.append(time.perf_counter() - start)
                 return
     watcher = threading.Thread(target=watch, daemon=True)
@@ -252,7 +257,7 @@ def main():
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=4, work_directory=str(work_parent),
+        settings=dict(adapter_version=5, work_directory=str(work_parent),
                       work_device=work_parent.stat().st_dev, write_delay_us=args.write_delay_us,
                       write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
                       write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
