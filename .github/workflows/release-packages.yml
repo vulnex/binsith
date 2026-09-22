@@ -5,12 +5,16 @@ on:
     paths:
       - '.github/workflows/release-packages.yml'
       - 'tools/package_release.py'
+      - 'tools/check_folder_examples.py'
+      - 'README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
     paths:
       - '.github/workflows/release-packages.yml'
       - 'tools/package_release.py'
+      - 'tools/check_folder_examples.py'
+      - 'README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
 permissions:
@@ -59,5 +63,6 @@ jobs:
             release-source/dist/*.tar.gz
             release-source/dist/*.zip
             release-source/dist/SHA256SUMS-${{ matrix.target }}
+            release-source/dist/folder-examples-${{ matrix.target }}.json
           if-no-files-found: error
           retention-days: 14

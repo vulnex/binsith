@@ -11,15 +11,12 @@ import subprocess
 import tempfile
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=Path('target/release/binsith'))
-    parser.add_argument('--output', type=Path, required=True)
-    args = parser.parse_args()
+def check_examples(binary, readme, output):
+    """Check the supplied trusted README against the supplied executable."""
     if os.name != 'posix':
-        parser.error('these are the README macOS/Linux shell examples')
-    binary = args.binary.resolve(strict=True)
-    readme = Path(__file__).resolve().parents[1] / 'README.md'
+        raise ValueError('these are the README macOS/Linux shell examples')
+    binary = Path(binary).resolve(strict=True)
+    readme = Path(readme).resolve(strict=True)
     source = readme.read_text()
     cases = []
     blocks = {}
@@ -27,7 +24,7 @@ def main():
         matches = re.findall(r'<!-- folder-example: ' + name + r' -->\s*```sh\n(.*?)\n```', source, re.S)
         assert len(matches) == 1, f'missing or duplicate README example: {name}'
         blocks[name] = matches[0]
-    with args.output.open('x') as evidence, tempfile.TemporaryDirectory(prefix='binsith-examples-') as temporary:
+    with Path(output).open('x') as evidence, tempfile.TemporaryDirectory(prefix='binsith-examples-') as temporary:
         root = Path(temporary).resolve()
         for name, expected in [('setup', 0), ('summary', 0), ('recursive', 0), ('limited', 1), ('inspect', 0)]:
             if name in ('setup', 'inspect'):
@@ -75,6 +72,19 @@ def main():
                        harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), cases=cases), evidence, indent=2)
         evidence.write('\n')
     print(f'{len(cases)}/{len(cases)} README example checks passed')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, default=Path('target/release/binsith'))
+    parser.add_argument('--readme', type=Path,
+                        default=Path(__file__).resolve().parents[1] / 'README.md',
+                        help='Trusted README to execute (defaults to this checkout)')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    if os.name != 'posix':
+        parser.error('these are the README macOS/Linux shell examples')
+    check_examples(args.binary, args.readme, args.output)
 
 
 if __name__ == '__main__':
