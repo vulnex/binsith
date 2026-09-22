@@ -85,7 +85,7 @@ def validate(destination, samples):
         assert body['complete'] and body['processing_complete']
         terminals[name] = {'path': record['path'], 'outcome': outcome, 'body': body}
     assert len(admitted) == len(terminals) == len(samples)
-    actual = {str(p.relative_to(destination)) for p in destination.rglob('*.json')}
+    actual = {p.relative_to(destination).as_posix() for p in destination.rglob('*.json')}
     assert actual == reports | {'manifest.json'}
     assert not list(destination.rglob('.pending-*'))
     assert not list(destination.glob('.manifest-*')) and not (destination / '.binsith.lock').exists()

@@ -13,14 +13,16 @@ class ScaleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             scratch = root / 'scratch'
-            listing = '\n'.join(['p42', 'fcwd', 'tDIR', 'n/input',
-                'f3', 'tREG', 'D1', 'i2', 's50', f'n{scratch}/x (deleted)',
-                'f4', 'tREG', 'D1', 'i2', 's50', f'n{scratch}/x (deleted)',
-                'f5', 'tREG', 's999', 'n/input-other/file',
-                'f6', 'tREG', 's10', 'n/input/file',
-                'f7', 'tDIR', 'n/input',
-                'f8', 'tREG', 's12', 'n/output/results/ab/.pending-x'])
-            result = descriptors(listing, Path('/input'), scratch, Path('/output'))
+            inputs = root / 'input'
+            output = root / 'output'
+            listing = '\n'.join(['p42', 'fcwd', 'tDIR', f'n{inputs}',
+                'f3', 'tREG', 'D1', 'i2', 's50', f'n{scratch / "x"} (deleted)',
+                'f4', 'tREG', 'D1', 'i2', 's50', f'n{scratch / "x"} (deleted)',
+                'f5', 'tREG', 's999', f'n{root / "input-other" / "file"}',
+                'f6', 'tREG', 's10', f'n{inputs / "file"}',
+                'f7', 'tDIR', f'n{inputs}',
+                'f8', 'tREG', 's12', f'n{output / "results" / "ab" / ".pending-x"}'])
+            result = descriptors(listing, inputs, scratch, output)
             self.assertEqual(result, {'open_descriptors': 6, 'input_files': 1,
                 'input_directories': 1, 'scratch_files': 2, 'scratch_logical_bytes': 50,
                 'pending_output_logical_bytes': 12})
