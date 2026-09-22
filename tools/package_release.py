@@ -24,6 +24,8 @@ import tarfile
 import tempfile
 import zipfile
 
+from check_folder_examples import check_examples
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SUPPORTED = {'aarch64-apple-darwin', 'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc'}
 
@@ -121,6 +123,12 @@ def package(root):
         if (not report['context']['processing_complete']
                 or report['indicators'][0]['value'] != 'https://example.org/release-smoke'):
             raise SystemExit('Packaged binary export smoke test failed.')
+        if not windows:
+            readme = pathlib.Path(temp)/'README.md'
+            readme.write_bytes(contents[name+'/README.md'])
+            evidence = pathlib.Path(temp)/'folder-examples.json'
+            check_examples(extracted, readme, evidence)
+            (output/f'folder-examples-{target}.json').write_bytes(evidence.read_bytes())
     archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
     checksum = f'{archive_hash}  {archive.name}\n'
     # Target-specific files can be downloaded together without name collisions.

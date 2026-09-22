@@ -69,6 +69,9 @@ The packager supports native macOS ARM64 (`aarch64-apple-darwin`), Linux x86-64
 (`x86_64-unknown-linux-gnu`), and Windows x86-64 (`x86_64-pc-windows-msvc`).
 Windows packages use ZIP; macOS and Linux packages use tar.gz. Each package is
 read back and its extracted binary is smoke-tested before checksums are written.
+macOS/Linux packages also execute the folder examples from the archived README
+against the extracted binary. Their build and content hashes and check results
+are saved as `dist/folder-examples-<target>.json` and retained with CI artifacts.
 
 The `Release packages` workflow builds Linux and Windows artifacts from the
 immutable workflow commit (`github.sha`), using the packaging script from that
