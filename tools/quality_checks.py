@@ -74,11 +74,11 @@ def stress(binary, cases, timeout):
     return {"cases": cases, "seed": "0xB17517", "timeout_seconds_per_case": timeout, "passed": True}
 
 
-def timed_process(args, timeout):
+def timed_process(args, timeout, *, env=None):
     # wait4 measures this child only; RUSAGE_CHILDREN would accumulate previous runs.
     with tempfile.TemporaryFile() as errors:
         start = time.perf_counter()
-        child = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=errors)
+        child = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=errors, env=env)
         peak = None
         try:
             if hasattr(os, "wait4"):

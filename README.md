@@ -735,6 +735,11 @@ skips symlinks and special files; it includes hidden files and follows subdirect
 only with `--recursive`. Detectable input replacement or mutation fails the file
 and prevents publication of its report; this is not a filesystem snapshot.
 
+Native folder output on macOS FAT32 volumes is currently unsupported: AppleDouble
+metadata and changing file identities can cause output-claim or ownership checks
+to fail. Do not delete existing output to bypass those checks. See the
+[USB compatibility findings](devnotes/benchmarks/fs20-usb-fat32-1cb5e29/README.md).
+
 Analysis flags apply independently to each file: summary, strings/matching strings,
 category/custom-pattern selection, decoding and string limits, encoding, ranges,
 embedded UTF-16 and entropy. For example, `--offset 4096` fails on files shorter

@@ -252,7 +252,7 @@ def main():
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=3, work_directory=str(work_parent),
+        settings=dict(adapter_version=4, work_directory=str(work_parent),
                       work_device=work_parent.stat().st_dev, write_delay_us=args.write_delay_us,
                       write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
                       write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
