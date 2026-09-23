@@ -1,6 +1,6 @@
 [package]
 name = "binsith"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 license = "Apache-2.0"
 include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "build.rs", "README.md", "CHANGELOG.md", "RELEASE.md", "LICENSE", "assets/branding/binsith-logo.png"]
