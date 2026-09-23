@@ -785,6 +785,17 @@ and atomic report/manifest replacement support inspection after process failure;
 ordinary flushes are not a guarantee of survival through power loss (`fsync`
 durability is not promised).
 
+### Network output compatibility
+
+Some macOS SMB mounts do not support the atomic no-replace publication needed
+for folder output. BinSith refuses those output destinations rather than risking
+replacement of an existing file or exposing partial reports. Use a supported local
+output directory, or run BinSith on the file server with a local output path inside
+the shared directory, then read the completed reports over SMB. The latter workflow
+was verified on the Linux test server at one and four workers; it does not establish
+network-output performance from macOS. Newly written network inputs must be stable;
+concurrent or delayed metadata changes can result in `file_changed`.
+
 ### Storage, privacy and measured performance
 
 Basic summary/string scanning streams input. Embedded UTF-16 and entropy may

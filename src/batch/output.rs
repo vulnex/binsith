@@ -96,6 +96,28 @@ fn unsafe_path() -> io::Error {
     )
 }
 
+// Do not substitute a check-then-rename or a visible partial file when atomic
+// no-replace publication is unavailable. Preserve refusal and explain recovery.
+fn publication_error(error: io::Error) -> io::Error {
+    let unsupported = error.kind() == io::ErrorKind::Unsupported;
+    // Darwin's ENOTSUP differs from EOPNOTSUPP and is not mapped to
+    // ErrorKind::Unsupported by every Rust toolchain.
+    #[cfg(target_os = "macos")]
+    let unsupported =
+        unsupported || error.raw_os_error() == Some(rustix::io::Errno::NOTSUP.raw_os_error());
+    if unsupported {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "output filesystem does not support atomic publication without replacement ({error}); \
+                 choose a local supported output directory, or run Binsith on the file server using its local path"
+            ),
+        )
+    } else {
+        error
+    }
+}
+
 fn private_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -614,7 +636,7 @@ impl PendingReport {
                     } else {
                         OutputCode::Io
                     },
-                    source: error.error,
+                    source: publication_error(error.error),
                 })
             }
         }
@@ -780,7 +802,7 @@ impl OutputClaim {
         } else {
             temporary
                 .persist_noclobber(&destination)
-                .map_err(|e| e.error)?
+                .map_err(|e| publication_error(e.error))?
         };
         PublishedFile::new(file, &destination)
     }
@@ -847,6 +869,23 @@ mod tests {
         drop(claim);
         assert!(lock.exists());
         assert_eq!(fs::read(destination).unwrap(), b"owned report");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn darwin_enotsup_publication_explains_safe_output_alternative() {
+        let error = publication_error(io::Error::from_raw_os_error(
+            rustix::io::Errno::NOTSUP.raw_os_error(),
+        ));
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error
+            .to_string()
+            .contains("atomic publication without replacement"));
+        assert!(error
+            .to_string()
+            .contains("local supported output directory"));
+        let denied = publication_error(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
