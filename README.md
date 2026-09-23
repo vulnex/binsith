@@ -738,11 +738,11 @@ skips symlinks and special files; it includes hidden files and follows subdirect
 only with `--recursive`. Detectable input replacement or mutation fails the file
 and prevents publication of its report; this is not a filesystem snapshot.
 
-The development build now supports folder output on the tested macOS FAT32 USB.
+BinSith supports folder output on the tested macOS FAT32 USB.
 It retains file handles for ownership checks and synchronizes FAT writes before
 recording metadata; this can add substantial write latency. FAT32 uses the volume's
 permission semantics. Existing output and preexisting AppleDouble metadata remain
-protected from reuse. [Validation and limits](devnotes/benchmarks/fs24-fat32-guards-a72fddc/README.md).
+protected from reuse.
 
 Reading FAT32 inputs while placing reports and `TMPDIR` on APFS remains a tested
 alternative. Hidden AppleDouble `._*` input files are scanned as ordinary files.
@@ -812,25 +812,16 @@ Reports and journals can contain local paths, extracted secrets, decoded text an
 surrounding evidence. Keep input, output and temporary storage in an appropriate
 location. BinSith does not execute scanned files or contact extracted addresses.
 
-Retained development measurements have passing evidence for all 28 warm workload/worker
-cases on the local macOS host under the frozen limits, including one noisy-case
-repeat. Controlled 10-microsecond per-write-delay observations now have passing evidence
-for all 28 combinations across retained runs, including quiet-host repeats of four
-previously noisy cases. These comparisons include per-file report writing and native batch
-journals; they differ from the published 0.4.2 discarded-output timings above.
-See [warm evidence](devnotes/benchmarks/fs24-fat32-guards-a72fddc/README.md) and
-[quiet-host qualification](devnotes/benchmarks/fs27-quiet-repeat-4ce73d3/README.md).
-Native Windows and Linux runtime/package checks pass. Physical-storage performance
-and final hosted CI remain unqualified. Synthetic write delay is not proof of
-physical-storage performance.
+Local synthetic benchmarks covered 28 warm workload/worker combinations and 28
+controlled write-latency combinations. Results are host-specific and do not
+establish physical-storage performance. Native macOS, Windows and Linux runtime
+checks pass; physical FAT32 performance remains unqualified.
 
 On the tested FAT32 USB, the 128-file strings workload exceeded the 120-second
-native benchmark timeout during warmup; no timed comparison completed. See the
-[physical FAT32 evidence](devnotes/benchmarks/fs30-fat32-timeout-9a768cd/README.md).
+native benchmark timeout during warmup; no timed comparison completed.
 For this drive, prefer local APFS output and temporary storage when scanning USB
 inputs.
 
-[Follow-up diagnostics](devnotes/benchmarks/fs31-fat32-diagnosis-9a768cd/README.md)
-found variable delays in filesystem synchronization and metadata operations on
+Follow-up diagnostics found variable delays in filesystem synchronization and metadata operations on
 this USB. An experimental synchronization change did not reliably eliminate the
 timeouts and was not adopted.

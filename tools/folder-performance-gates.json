@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "frozen_before": "FS-05 scanner execution refactor",
+  "minimum_timed_runs": 5,
+  "max_noise_spread_percent": 20.0,
+  "max_median_regression_percent": 25.0,
+  "minimum_time_allowance_seconds": 0.01,
+  "max_first_report_regression_percent": 50.0,
+  "minimum_first_report_allowance_seconds": 0.02,
+  "max_single_child_rss_regression_percent": 25.0,
+  "minimum_single_child_rss_allowance_bytes": 4194304,
+  "max_aggregate_rss_regression_percent": 25.0,
+  "minimum_aggregate_rss_allowance_bytes": 16777216,
+  "required_resource_workloads": ["large_summary", "mixed_strings", "extra_passes"],
+  "notes": [
+    "Same host, release builds, corpus, flags, harness and settings are required.",
+    "Time gates use medians of uninstrumented runs; resource samples never enter time medians.",
+    "Sampled resource regressions require investigation; they do not establish hard upper bounds.",
+    "Open scratch logical bytes must not exceed total input bytes in the workload; tighter worker-specific bounds are FS-16.",
+    "A noisy or unmeasurable required case is inconclusive, not a pass. Re-run the unchanged experiment.",
+    "Retain these thresholds during implementation. Any scope/gate revision requires an explicit documented decision.",
+    "Native-mode comparison requires the FS-20 adapter and equivalent artifacts. Re-run the unchanged baseline executable with that same adapter rather than comparing incompatible harnesses."
+  ]
+}

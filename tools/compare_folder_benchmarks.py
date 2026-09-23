@@ -124,7 +124,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--gates", default="devnotes/benchmarks/folder-performance-gates.json")
+    parser.add_argument("--gates", default="tools/folder-performance-gates.json")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     load = lambda path: json.loads(Path(path).read_text())
