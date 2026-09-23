@@ -820,3 +820,14 @@ See [warm evidence](devnotes/benchmarks/fs24-fat32-guards-a72fddc/README.md) and
 Native Windows and Linux runtime/package checks pass. Physical-storage performance
 and final hosted CI remain unqualified. Synthetic write delay is not proof of
 physical-storage performance.
+
+On the tested FAT32 USB, the 128-file strings workload exceeded the 120-second
+native benchmark timeout during warmup; no timed comparison completed. See the
+[physical FAT32 evidence](devnotes/benchmarks/fs30-fat32-timeout-9a768cd/README.md).
+For this drive, prefer local APFS output and temporary storage when scanning USB
+inputs.
+
+[Follow-up diagnostics](devnotes/benchmarks/fs31-fat32-diagnosis-9a768cd/README.md)
+found variable delays in filesystem synchronization and metadata operations on
+this USB. An experimental synchronization change did not reliably eliminate the
+timeouts and was not adopted.
