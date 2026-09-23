@@ -1,10 +1,9 @@
 # Changelog
 
-## 0.5.0 — Unreleased
+## 0.5.0 — 2026-09-23
 
-Release preparation for native folder scanning. The implementation has passed hosted
-checks on macOS, Linux and Windows; this versioned release still requires its
-own final-commit verification and packages before publication.
+Native folder scanning for analyst-reviewed static triage, with native packages
+for macOS ARM64, Linux x86-64 and Windows x86-64.
 
 - Scan directories with bounded parallel workers, optional recursion, per-file JSON
   reports, an outcome journal and a batch manifest. Use a new or empty output
@@ -34,7 +33,7 @@ own final-commit verification and packages before publication.
 - Verify Windows ACL, junction, long-path and console behavior in hosted CI. Keep
   console-test fixtures sparse without allocating their multi-gigabyte logical
   size, and stop CI immediately when a capability probe fails.
-- Provide unsigned native candidate packages with build identity and checksum
+- Provide unsigned native packages with build identity and checksum
   verification. Existing 0.4.2 release assets remain unchanged.
 
 ## 0.4.2 — 2026-09-19
