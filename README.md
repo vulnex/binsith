@@ -800,12 +800,12 @@ location. BinSith does not execute scanned files or contact extracted addresses.
 
 The current scanner source has passing evidence for all 28 warm workload/worker
 cases on the local macOS host under the frozen limits, including one noisy-case
-repeat. Controlled 10-microsecond per-write-delay observations have passing evidence
-for 24 of 28 combinations; four remain inconclusive after one repeat because of
-timing noise. These comparisons include per-file report writing and native batch
+repeat. Controlled 10-microsecond per-write-delay observations now have passing evidence
+for all 28 combinations across retained runs, including quiet-host repeats of four
+previously noisy cases. These comparisons include per-file report writing and native batch
 journals; they differ from the published 0.4.2 discarded-output timings above.
 See [warm evidence](devnotes/benchmarks/fs24-fat32-guards-a72fddc/README.md) and
-[current qualification](devnotes/benchmarks/fs26-local-gates-72433c9/README.md).
+[quiet-host qualification](devnotes/benchmarks/fs27-quiet-repeat-4ce73d3/README.md).
 Native Windows and Linux runtime/package checks pass. Physical-storage performance
 and final hosted CI remain unqualified. Synthetic write delay is not proof of
 physical-storage performance.
