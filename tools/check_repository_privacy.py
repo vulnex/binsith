@@ -14,6 +14,13 @@ violations = [
     f"private directory is tracked: {name}"
     for name in tracked if name and name.split("/", 1)[0].lower() in private_roots
 ]
+# A clean tree alone is insufficient: merging an old clone can restore private history.
+for directory in sorted(private_roots):
+    history = subprocess.check_output(
+        ["git", "rev-list", "--max-count=1", "HEAD", "--", directory + "/"], cwd=root
+    ).strip()
+    if history:
+        violations.append(f"private directory exists in reachable history: {directory}/")
 for filename in ("README.md", "RELEASE.md", "CHANGELOG.md"):
     text = (root / filename).read_text()
     if re.search(r"\]\([^\n)]*(?:devnotes|evaluations)/", text, re.IGNORECASE):
