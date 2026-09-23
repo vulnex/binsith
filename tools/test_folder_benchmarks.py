@@ -27,7 +27,7 @@ from compare_folder_benchmarks import compare
 
 class BenchmarkContracts(unittest.TestCase):
     def setUp(self):
-        self.gates = json.loads((Path(__file__).resolve().parents[1] / "devnotes/benchmarks/folder-performance-gates.json").read_text())
+        self.gates = json.loads((Path(__file__).resolve().parents[1] / "tools/folder-performance-gates.json").read_text())
         resource = {"available": True, "samples": 4, "errors": [],
                     "sampled_aggregate_rss_bytes": 8000000, "sampled_open_scratch_bytes": 1024}
         sample = {"elapsed_seconds": 1.0, "first_report_observed_seconds": 0.1,

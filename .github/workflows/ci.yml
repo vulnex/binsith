@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Reject private repository content
+        run: python tools/check_repository_privacy.py
       - name: Folder filesystem identities and volume capabilities
         run: python tools/check_folder_filesystems.py --output target/fs19-filesystems.json
       - name: Windows ACL, junction, long-path and console behavior
@@ -71,6 +73,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Reject private repository content
+        run: python tools/check_repository_privacy.py
       - name: Check CLI and fuzz dependency alignment
         run: |
           python tools/check_fuzz_alignment.py

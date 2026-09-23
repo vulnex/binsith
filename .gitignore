@@ -8,3 +8,6 @@
 # Local malware-derived analysis; never publish or commit these exports.
 /evaluations/
 /dist/
+
+# Private development notes and qualification evidence; never commit.
+/devnotes/

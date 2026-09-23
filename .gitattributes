@@ -1,0 +1,4 @@
+
+# Exclude private local material from source archives.
+/devnotes export-ignore
+/evaluations export-ignore

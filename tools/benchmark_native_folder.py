@@ -280,7 +280,7 @@ def main():
     results = [dict(common, binary_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
         build=subprocess.check_output([binary, '--version'], text=True).strip(),
         engine='external' if i == 0 else 'native', scenarios={}) for i, binary in enumerate(binaries)]
-    gates = json.loads(Path('devnotes/benchmarks/folder-performance-gates.json').read_text())
+    gates = json.loads(Path('tools/folder-performance-gates.json').read_text())
     evidence = {'run_state': 'running', 'expected_scenarios': len(args.workers) * (len(args.workloads) if args.workloads else 7),
         'baseline': results[0], 'candidate': results[1], 'gates': gates,
         'limitations': ['Warm/uncontrolled cache only; optional synthetic per-write latency is not a physical slow disk, bandwidth cap, fsync delay, or cold-cache measurement.',

@@ -69,17 +69,16 @@ A cross-compile is insufficient. Retain build/source identity and log hashes for
 each platform; the final candidate must include the tested scanner source.
 
 Keep the folder performance thresholds frozen. Retain the warm and controlled
-write-latency matrices, and run the physical-storage procedure in
-[the storage runbook](devnotes/benchmarks/folder-storage-validation.md) on an
-appropriate data volume. Synthetic sleeps do not close physical-storage coverage.
+write-latency matrices, and test physical-storage performance on an appropriate
+data volume using synthetic input and a dedicated writable test directory. Synthetic sleeps do not close physical-storage coverage.
 Do not promote an inconclusive noisy case as a pass; preserve original and repeated
 observations. If physical coverage cannot be completed, explicitly accept and
 document that release scope before promotion. Hosted Windows checks pass on the versioned candidate; rerun them on the final
 release commit.
 
-The [folder readiness review](devnotes/folder-release-readiness.md) records current
-local evidence and outstanding work. It is a development checkpoint, not permission
-to publish or a replacement for final-commit CI, fuzzing and package verification.
+Development notes, raw logs and qualification evidence are private local material.
+Keep them outside Git and release/source packages. Publish only reviewed summaries;
+local evidence is not a substitute for final-commit CI and package verification.
 
 ## Package
 
@@ -107,8 +106,8 @@ revision, and source fingerprint match it. It includes only the trusted binary,
 README.md, CHANGELOG.md, RELEASE.md, LICENSE, the selected README logo, and generated
 BUILD-INFO.json. Alternative branding concepts are excluded. It validates
 archive membership and binary digest before producing SHA256SUMS in `dist/`.
-No recursive workspace archive is used. Local `evaluations/` content must never
-be added to a release, source package, or public issue.
+No recursive workspace archive is used. Local `devnotes/` and `evaluations/` content
+must never be committed, uploaded, or added to release/source packages or issues.
 
 The archive is unsigned. SHA256SUMS detects corruption but is not proof of
 publisher authenticity. This procedure does not claim reproducible compilation.
