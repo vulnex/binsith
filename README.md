@@ -12,8 +12,8 @@ It does not inspect executable headers, sections, imports, or entry points.
 See the [release notes](CHANGELOG.md) and [release procedure](RELEASE.md)
 for compatibility changes, packaging instructions, and promotion gates.
 
-This checkout prepares **0.5.0**, an unpublished folder-scanning release.
-The download examples below refer to the published 0.4.2 release.
+**0.5.0** adds native folder scanning with bounded parallel workers, per-file
+reports, an outcome journal and a batch manifest.
 
 ## Performance and reliability
 
@@ -56,11 +56,11 @@ and benchmark reproduction instructions.
 The repository is currently private; sign in with a GitHub account that has access.
 Download the archive for your platform and `SHA256SUMS` from the same release.
 
-| Platform | 0.4.2 archive |
+| Platform | 0.5.0 archive |
 | --- | --- |
-| macOS, Apple Silicon (ARM64) | `binsith-0.4.2-aarch64-apple-darwin.tar.gz` |
-| Linux, x86-64 (built on Ubuntu 22.04) | `binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows, x86-64 | `binsith-0.4.2-x86_64-pc-windows-msvc.zip` |
+| macOS, Apple Silicon (ARM64) | `binsith-0.5.0-aarch64-apple-darwin.tar.gz` |
+| Linux, x86-64 (built on Ubuntu 22.04) | `binsith-0.5.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows, x86-64 | `binsith-0.5.0-x86_64-pc-windows-msvc.zip` |
 
 Run these commands in the folder containing your download. Compare the hash with
 its filename's entry in `SHA256SUMS` before extracting. Archives are unsigned;
@@ -69,31 +69,31 @@ checksums detect corruption, not publisher authenticity.
 **macOS (Apple Silicon)**
 
 ```sh
-shasum -a 256 binsith-0.4.2-aarch64-apple-darwin.tar.gz
-tar -xzf binsith-0.4.2-aarch64-apple-darwin.tar.gz
-cd binsith-0.4.2-aarch64-apple-darwin
+shasum -a 256 binsith-0.5.0-aarch64-apple-darwin.tar.gz
+tar -xzf binsith-0.5.0-aarch64-apple-darwin.tar.gz
+cd binsith-0.5.0-aarch64-apple-darwin
 ./binsith --version
 ```
 
 **Linux (x86-64)**
 
 ```sh
-sha256sum binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf binsith-0.4.2-x86_64-unknown-linux-gnu.tar.gz
-cd binsith-0.4.2-x86_64-unknown-linux-gnu
+sha256sum binsith-0.5.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf binsith-0.5.0-x86_64-unknown-linux-gnu.tar.gz
+cd binsith-0.5.0-x86_64-unknown-linux-gnu
 ./binsith --version
 ```
 
 **Windows (PowerShell, x86-64)**
 
 ```powershell
-Get-FileHash .\binsith-0.4.2-x86_64-pc-windows-msvc.zip -Algorithm SHA256
-Expand-Archive .\binsith-0.4.2-x86_64-pc-windows-msvc.zip -DestinationPath .
-Set-Location .\binsith-0.4.2-x86_64-pc-windows-msvc
+Get-FileHash .\binsith-0.5.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Expand-Archive .\binsith-0.5.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+Set-Location .\binsith-0.5.0-x86_64-pc-windows-msvc
 .\binsith.exe --version
 ```
 
-These examples use 0.4.2 filenames. For a newer release, substitute the filenames
+These examples use 0.5.0 filenames. For a newer release, substitute the filenames
 shown on its release page. To build locally, see [Build and verify](#build-and-verify).
 
 ## Quickstart: analyze synthetic input
@@ -621,13 +621,12 @@ Copyright 2026 VULNEX - Simon Roses Femerling.
 BinSith is licensed under the [Apache License 2.0](LICENSE).
 
 
-## Folder scanning (development)
+## Folder scanning
 
-Directory scanning is available in the 0.5.0 source; it is not
-included in published 0.4.2 downloads. Build the current checkout with `cargo build --locked
---release` and use `target/release/binsith` (or put that binary on your `PATH`).
-The preceding development candidate passed hosted macOS, Linux and Windows checks.
-The versioned release still needs its own final checks and packages before publication.
+Directory scanning is included in 0.5.0 packages for macOS ARM64, Linux x86-64 and
+Windows x86-64. Use the extracted binary or put it on your `PATH`. To build from
+source, run `cargo build --locked --release` and use `target/release/binsith`.
+See the filesystem and cancellation limitations below before scanning large trees.
 
 ### Try a small folder
 

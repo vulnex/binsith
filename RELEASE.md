@@ -1,18 +1,17 @@
 # Release procedure
 
-The published version remains `0.4.2`. This checkout prepares **`0.5.0`**,
-an unpublished release adding native folder scanning. Do not replace the published
-0.4.2 assets. Publish 0.5.0 only after its final committed inputs and packages pass
-the gates below.
+Version **0.5.0** adds native folder scanning. Preserve published 0.4.2 assets;
+use a separate `v0.5.0` tag and release. Publish only after the final committed
+inputs and packages pass the gates below.
 The supported role remains static triage with analyst review. See CHANGELOG.md
 for consumer-visible behavior changes.
 
 ## 0.5.0 scope and qualification
 
-The preceding development candidate `195b803` passed all six hosted runtime,
-sanitizer and package jobs. Those results establish the implementation checkpoint;
-the version bump changes build metadata and the source fingerprint, so the 0.5.0
-commit must receive fresh CI and native packages. Do not relabel older archives.
+Versioned candidate `5f16ff0` passed all six hosted runtime, sanitizer and package
+jobs, with verified native archives for all three platforms. Final release
+wording is committed separately; packages must embed that final commit and pass
+the same checks before publication. Do not relabel older archives.
 
 Retain these limitations in the release notes:
 
@@ -25,8 +24,8 @@ Retain these limitations in the release notes:
   can leave an incomplete batch and a stale output claim.
 - Packages are unsigned; checksums detect corruption, not publisher authenticity.
 
-Confirm the remaining storage scope at promotion. Preparing these notes does not
-mark incomplete physical-storage measurements as passing or authorize publication.
+The release retains this limited storage scope; incomplete physical-storage
+measurements are not passing results.
 
 ## Local verification
 
@@ -75,8 +74,8 @@ write-latency matrices, and run the physical-storage procedure in
 appropriate data volume. Synthetic sleeps do not close physical-storage coverage.
 Do not promote an inconclusive noisy case as a pass; preserve original and repeated
 observations. If physical coverage cannot be completed, explicitly accept and
-document that release scope before promotion. Hosted Windows checks now pass on
-the development candidate; rerun them on the versioned 0.5.0 commit.
+document that release scope before promotion. Hosted Windows checks pass on the versioned candidate; rerun them on the final
+release commit.
 
 The [folder readiness review](devnotes/folder-release-readiness.md) records current
 local evidence and outstanding work. It is a development checkpoint, not permission
