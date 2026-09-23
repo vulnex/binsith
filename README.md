@@ -735,14 +735,16 @@ skips symlinks and special files; it includes hidden files and follows subdirect
 only with `--recursive`. Detectable input replacement or mutation fails the file
 and prevents publication of its report; this is not a filesystem snapshot.
 
-Native folder output on macOS FAT32 volumes is currently unsupported: AppleDouble
-metadata and changing file identities can cause output-claim or ownership checks
-to fail. Do not delete existing output to bypass those checks. See the
-[USB compatibility findings](devnotes/benchmarks/fs20-usb-fat32-1cb5e29/README.md).
-A tested alternative is to read inputs from FAT32 while writing reports and
-temporary snapshots to APFS. Select an APFS path with `--output-dir` and keep
-`TMPDIR` on APFS. Hidden AppleDouble `._*` files are scanned as ordinary inputs;
-they are not silently excluded. [Validation](devnotes/benchmarks/fs23-qualification-0bc38ff/README.md).
+The development build now supports folder output on the tested macOS FAT32 USB.
+It retains file handles for ownership checks and synchronizes FAT writes before
+recording metadata; this can add substantial write latency. FAT32 uses the volume's
+permission semantics. Existing output and preexisting AppleDouble metadata remain
+protected from reuse. [Validation and limits](devnotes/benchmarks/fs24-fat32-guards-a72fddc/README.md).
+
+Reading FAT32 inputs while placing reports and `TMPDIR` on APFS remains a tested
+alternative. Hidden AppleDouble `._*` input files are scanned as ordinary files.
+For outputs, macOS may create `._*` metadata companions; use the report locations
+in `files.jsonl` to identify analysis reports.
 
 Analysis flags apply independently to each file: summary, strings/matching strings,
 category/custom-pattern selection, decoding and string limits, encoding, ranges,

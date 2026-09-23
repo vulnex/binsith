@@ -60,7 +60,13 @@ fn new_and_existing_empty_destinations_are_claimed_and_released() {
 
 #[test]
 fn nonempty_and_stale_outputs_are_preserved() {
-    for name in ["evidence", ".hidden", ".binsith.lock", "manifest.json"] {
+    for name in [
+        "evidence",
+        ".hidden",
+        ".binsith.lock",
+        "._.binsith.lock",
+        "manifest.json",
+    ] {
         let (_temp, _base, roots) = fixture();
         fs::create_dir(roots.output()).unwrap();
         fs::write(roots.output().join(name), b"user-owned or incomplete").unwrap();

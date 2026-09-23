@@ -12,8 +12,7 @@
 //
 
 use super::{
-    input::Snapshot,
-    output::{OutputClaim, OwnedJournal, PublishedReport},
+    output::{OutputClaim, OwnedJournal, PublishedFile, PublishedReport},
     *,
 };
 use std::{
@@ -37,7 +36,7 @@ pub struct DiskStore {
     output: OutputClaim,
     files: Option<OwnedJournal>,
     errors: Option<OwnedJournal>,
-    manifest: Option<Snapshot>,
+    manifest: Option<PublishedFile>,
 }
 impl DiskStore {
     pub fn new(output: OutputClaim) -> Self {

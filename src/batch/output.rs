@@ -151,12 +151,85 @@ fn remove_empty_owned(path: &Path, expected: &Snapshot) {
     }
 }
 
+// macOS msdos can defer both cluster identity and write timestamps until
+// writeback. Settle our writes before capturing metadata used for later mutation
+// checks. Other filesystems retain the existing flush-only behavior.
+fn settle_owned_metadata(file: &File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let filesystem = rustix::fs::fstatfs(file)?;
+        if filesystem
+            .f_fstypename
+            .iter()
+            .take_while(|byte| **byte != 0)
+            .map(|byte| *byte as u8)
+            .eq(b"msdos".iter().copied())
+        {
+            file.sync_all()?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = file;
+    Ok(())
+}
+
+// Keep the published object open until its receipt is committed or its manifest
+// replaced. Some filesystems change inode numbers across rename/close; compare
+// the pathname to the live handle, and content metadata to the saved snapshot.
+// Receipts are bounded by workers/result queues; only one manifest is retained.
+pub(super) struct PublishedFile {
+    file: File,
+    contents: Snapshot,
+}
+impl PublishedFile {
+    fn new(file: File, path: &Path) -> io::Result<Self> {
+        settle_owned_metadata(&file)?;
+        // Publication itself can change metadata on FAT32. Observe the final
+        // pathname before saving the live handle's post-publication snapshot.
+        let observed = open_checked(path, false)?;
+        let contents = Snapshot::opened(&file)?;
+        if !Snapshot::opened(&observed)?.same_data(&contents) {
+            return Err(unsafe_path());
+        }
+        Ok(Self { file, contents })
+    }
+    fn verify_at(&self, path: &Path) -> io::Result<()> {
+        let current = Snapshot::opened(&self.file)?;
+        let observed = open_checked(path, false)?;
+        if !current.same_contents(&self.contents)
+            || !Snapshot::opened(&observed)?.same_data(&current)
+        {
+            return Err(unsafe_path());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn claim_sidecar(root: &Path) -> io::Result<Option<PublishedFile>> {
+    use std::io::Read;
+    let path = root.join("._.binsith.lock");
+    let mut file = match open_checked(&path, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut header = [0; 8];
+    file.read_exact(&mut header)?;
+    if header != [0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00] {
+        return Err(unsafe_path());
+    }
+    let contents = Snapshot::opened(&file)?;
+    Ok(Some(PublishedFile { file, contents }))
+}
+
 struct Claim {
     root: PathBuf,
     _root_guard: File,
     root_identity: Snapshot,
     lock: Option<File>,
-    lock_identity: Snapshot,
+    #[cfg(target_os = "macos")]
+    lock_sidecar: Option<PublishedFile>,
     results: Option<Snapshot>,
     // Bounded by the 256 possible two-hex-digit shards, not report count.
     shards: Mutex<BTreeMap<String, Snapshot>>,
@@ -169,9 +242,17 @@ impl Claim {
         let metadata = fs::symlink_metadata(&lock_path)?;
         if is_link(&metadata)
             || !metadata.is_file()
-            || !Snapshot::observed(&lock_path, &metadata)?.same_identity(&self.lock_identity)
+            || !Snapshot::observed(&lock_path, &metadata)?.same_identity(&Snapshot::opened(
+                self.lock.as_ref().ok_or_else(unsafe_path)?,
+            )?)
         {
             return Err(unsafe_path());
+        }
+        #[cfg(target_os = "macos")]
+        match &self.lock_sidecar {
+            Some(sidecar) => sidecar.verify_at(&self.root.join("._.binsith.lock"))?,
+            None if self.root.join("._.binsith.lock").try_exists()? => return Err(unsafe_path()),
+            None => {}
         }
         if let Some(results) = &self.results {
             check_directory(&self.root.join("results"), results)?;
@@ -218,6 +299,21 @@ impl OutputClaim {
         let root_guard =
             open_checked(roots.output(), true).map_err(|e| OutputError::io(stage, e))?;
         let root_identity = Snapshot::opened(&root_guard).map_err(|e| OutputError::io(stage, e))?;
+        // Reject preexisting sidecars as well as other content before creating
+        // the claim; repeat the check after exclusive creation for contenders.
+        if fs::read_dir(roots.output())
+            .map_err(|e| OutputError::io(stage, e))?
+            .next()
+            .transpose()
+            .map_err(|e| OutputError::io(stage, e))?
+            .is_some()
+        {
+            return Err(OutputError {
+                stage,
+                code: OutputCode::BusyOrNonempty,
+                source: io::Error::new(io::ErrorKind::AlreadyExists, "output is not empty"),
+            });
+        }
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -236,25 +332,34 @@ impl OutputClaim {
                 },
                 source,
             })?;
-        let lock_identity = match Snapshot::opened(&lock) {
-            Ok(identity) => identity,
-            // Cannot establish ownership safely: leave an incomplete claim for inspection.
-            Err(error) => return Err(OutputError::io(stage, error)),
-        };
         let mut claim = Claim {
             root: roots.output().to_owned(),
             _root_guard: root_guard,
             root_identity,
             lock: Some(lock),
-            lock_identity,
+            #[cfg(target_os = "macos")]
+            lock_sidecar: None,
             results: None,
             shards: Mutex::new(BTreeMap::new()),
         };
+        #[cfg(test)]
+        faults::hit(Point::ClaimCreated).map_err(|e| OutputError::io(stage, e))?;
+        #[cfg(target_os = "macos")]
+        {
+            settle_owned_metadata(claim.lock.as_ref().unwrap())
+                .map_err(|e| OutputError::io(stage, e))?;
+            claim.lock_sidecar =
+                claim_sidecar(&claim.root).map_err(|e| OutputError::io(stage, e))?;
+        }
         claim.verify().map_err(|e| OutputError::io(stage, e))?;
         // Claim first, then check emptiness: simultaneous contenders cannot both succeed.
         for entry in fs::read_dir(&claim.root).map_err(|e| OutputError::io(stage, e))? {
             let entry = entry.map_err(|e| OutputError::io(stage, e))?;
             if entry.file_name() != CLAIM_FILE {
+                #[cfg(target_os = "macos")]
+                if entry.file_name() == "._.binsith.lock" && claim.lock_sidecar.is_some() {
+                    continue;
+                }
                 return Err(OutputError {
                     stage,
                     code: OutputCode::BusyOrNonempty,
@@ -344,7 +449,7 @@ pub struct PublishedReport {
     pub(super) report_id: String,
     pub(super) location: String,
     owner: OutputClaim,
-    identity: Snapshot,
+    published: PublishedFile,
 }
 impl PublishedReport {
     pub fn report_id(&self) -> &str {
@@ -367,11 +472,8 @@ impl PublishedReport {
             &owner.root().join("results").join(&self.report_id[..2]),
             &shards[&self.report_id[..2]],
         )?;
-        let file = open_checked(&owner.root().join(&self.location), false)?;
-        if !Snapshot::opened(&file)?.same_data(&self.identity) {
-            return Err(unsafe_path());
-        }
-        drop(file);
+        self.published
+            .verify_at(&owner.root().join(&self.location))?;
         Ok(())
     }
 }
@@ -481,8 +583,6 @@ impl PendingReport {
             code: OutputCode::UnsafePath,
             source,
         })?;
-        let identity = Snapshot::opened(self.temporary.as_ref().unwrap().as_file())
-            .map_err(|e| OutputError::io(OutputStage::Publish, e))?;
         let destination = self.owner.root().join(&self.location);
         #[cfg(test)]
         faults::hit(Point::ReportPublish).map_err(|e| OutputError::io(OutputStage::Publish, e))?;
@@ -490,10 +590,11 @@ impl PendingReport {
             .temporary
             .take()
             .unwrap()
-            .persist_noclobber(destination)
+            .persist_noclobber(&destination)
         {
             Ok(file) => {
-                drop(file);
+                let published = PublishedFile::new(file, &destination)
+                    .map_err(|e| OutputError::io(OutputStage::Publish, e))?;
                 #[cfg(test)]
                 faults::hit(Point::ReportPublished)
                     .map_err(|e| OutputError::io(OutputStage::Publish, e))?;
@@ -501,7 +602,7 @@ impl PendingReport {
                     report_id: std::mem::take(&mut self.report_id),
                     location: std::mem::take(&mut self.location),
                     owner: self.owner.clone(),
-                    identity,
+                    published,
                 })
             }
             Err(error) => {
@@ -536,10 +637,12 @@ impl OwnedJournal {
     pub(super) fn verify(&self) -> io::Result<()> {
         self.owner.0.verify()?;
         let metadata = fs::symlink_metadata(&self.path)?;
+        let observed = Snapshot::observed(&self.path, &metadata)?;
+        let current = Snapshot::opened(&self.file)?;
         if !metadata.is_file()
             || is_link(&metadata)
-            || Snapshot::observed(&self.path, &metadata)? != self.identity
-            || Snapshot::opened(&self.file)? != self.identity
+            || !observed.same_data(&current)
+            || !current.same_contents_and_change(&self.identity)
         {
             return Err(unsafe_path());
         }
@@ -571,7 +674,14 @@ impl OwnedJournal {
         self.file.flush()?;
         #[cfg(test)]
         faults::hit(Point::Journal(kind, Step::Flushed))?;
-        self.identity = Snapshot::opened(&self.file)?;
+        settle_owned_metadata(&self.file)?;
+        let metadata = fs::symlink_metadata(&self.path)?;
+        let observed = Snapshot::observed(&self.path, &metadata)?;
+        let current = Snapshot::opened(&self.file)?;
+        if !metadata.is_file() || is_link(&metadata) || !observed.same_data(&current) {
+            return Err(unsafe_path());
+        }
+        self.identity = current;
         self.verify()
     }
 }
@@ -598,6 +708,7 @@ impl OutputClaim {
             options.mode(0o600);
         }
         let file = options.open(&path)?;
+        settle_owned_metadata(&file)?;
         let identity = Snapshot::opened(&file)?;
         Ok(OwnedJournal {
             file,
@@ -610,8 +721,8 @@ impl OutputClaim {
     pub(super) fn write_manifest(
         &self,
         manifest: &super::Manifest,
-        previous: Option<&Snapshot>,
-    ) -> io::Result<Snapshot> {
+        previous: Option<&PublishedFile>,
+    ) -> io::Result<PublishedFile> {
         manifest.validate().map_err(io::Error::other)?;
         self.0.verify()?;
         let destination = self.root().join("manifest.json");
@@ -640,16 +751,9 @@ impl OutputClaim {
         #[cfg(test)]
         faults::hit(Point::ManifestFlush)?;
         temporary.flush()?;
-        let identity = Snapshot::opened(temporary.as_file())?;
         self.0.verify()?;
         if let Some(previous) = previous {
-            let metadata = fs::symlink_metadata(&destination)?;
-            if !metadata.is_file()
-                || is_link(&metadata)
-                || !Snapshot::observed(&destination, &metadata)?.same_data(previous)
-            {
-                return Err(unsafe_path());
-            }
+            previous.verify_at(&destination)?;
         }
         // The first manifest never replaces data; later snapshots replace only
         // the previously owned manifest. Hostile concurrent mutation is excluded.
@@ -660,26 +764,90 @@ impl OutputClaim {
                 faults::hit(Point::FinalManifestReplace)?;
             }
         }
-        if previous.is_some() {
+        let file = if previous.is_some() {
             // tempfile uses MoveFileExW, which rejects an open destination even
             // when readers share deletion. std also tries FileRenameInfoEx with
             // POSIX semantics, so readers can finish on the previous snapshot.
             #[cfg(windows)]
-            fs::rename(temporary.path(), &destination)?;
+            {
+                fs::rename(temporary.path(), &destination)?;
+                temporary.into_file()
+            }
             #[cfg(not(windows))]
-            temporary.persist(destination).map_err(|e| e.error)?;
+            {
+                temporary.persist(&destination).map_err(|e| e.error)?
+            }
         } else {
             temporary
-                .persist_noclobber(destination)
-                .map_err(|e| e.error)?;
-        }
-        Ok(identity)
+                .persist_noclobber(&destination)
+                .map_err(|e| e.error)?
+        };
+        PublishedFile::new(file, &destination)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires BINSITH_TEST_APPLEDOUBLE_VOLUME on a disposable FAT32 test directory"]
+    fn appledouble_claim_and_report_retain_replacement_detection() {
+        use super::faults::{Action, Gate, Plan};
+        let volume = std::env::var_os("BINSITH_TEST_APPLEDOUBLE_VOLUME").unwrap();
+        let temp = tempfile::Builder::new()
+            .prefix("binsith-fat32-guard-test-")
+            .tempdir_in(volume)
+            .unwrap();
+        let base = fs::canonicalize(temp.path()).unwrap();
+        fs::create_dir(base.join("input")).unwrap();
+        let roots = resolve_roots(&base.join("input"), &base.join("output")).unwrap();
+        let gate = Arc::new(Gate::default());
+        let claim = std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let _faults = faults::install(Some(Plan::new(
+                    Point::ClaimCreated,
+                    1,
+                    Action::Gate(gate.clone()),
+                )));
+                OutputClaim::acquire(&roots)
+            });
+            let ready = gate.wait_for(1);
+            let status = if ready {
+                Some(
+                    std::process::Command::new("/usr/bin/xattr")
+                        .args(["-w", "com.binsith.test", "owned-metadata"])
+                        .arg(roots.output().join(CLAIM_FILE))
+                        .status(),
+                )
+            } else {
+                None
+            };
+            let sidecar = roots.output().join("._.binsith.lock").is_file();
+            gate.release();
+            let result = handle.join().unwrap();
+            assert!(ready && status.unwrap().unwrap().success() && sidecar);
+            result.unwrap()
+        });
+        assert!(OutputClaim::acquire(&roots).is_err());
+        let mut report = claim.begin_report(&path("sample")).unwrap();
+        report.write_all(b"owned report").unwrap();
+        let receipt = report.publish(|| Ok(())).unwrap();
+        receipt.verify_owner(&claim).unwrap();
+        let destination = roots.output().join(receipt.location());
+        fs::rename(&destination, destination.with_extension("moved")).unwrap();
+        fs::write(&destination, b"owned report").unwrap();
+        assert!(receipt.verify_owner(&claim).is_err());
+        drop(receipt);
+        let lock = roots.output().join(CLAIM_FILE);
+        fs::rename(&lock, roots.output().join("old-lock")).unwrap();
+        fs::write(&lock, b"").unwrap();
+        assert!(claim.0.verify().is_err());
+        drop(claim);
+        assert!(lock.exists());
+        assert_eq!(fs::read(destination).unwrap(), b"owned report");
+    }
 
     #[test]
     fn json_line_partial_write_error_is_not_retried_on_drop() {
@@ -740,6 +908,47 @@ mod tests {
     }
     fn path(name: &str) -> RelativePath {
         RelativePath::from_relative(Path::new(name)).unwrap()
+    }
+
+    #[test]
+    fn published_handle_rejects_same_contents_and_mtime_replacement() {
+        let (_temp, roots) = fixture();
+        let claim = OutputClaim::acquire(&roots).unwrap();
+        let mut pending = claim.begin_report(&path("sample")).unwrap();
+        pending.write_all(b"report").unwrap();
+        let receipt = pending.publish(|| Ok(())).unwrap();
+        receipt.verify_owner(&claim).unwrap();
+        let destination = roots.output().join(receipt.location());
+        let modified = fs::metadata(&destination).unwrap().modified().unwrap();
+        fs::rename(&destination, destination.with_extension("moved")).unwrap();
+        fs::write(&destination, b"report").unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&destination)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(receipt.verify_owner(&claim).is_err());
+        drop(receipt);
+        assert_eq!(fs::read(destination).unwrap(), b"report");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn replaced_claim_sidecar_preserves_foreign_data_on_drop() {
+        let (_temp, roots) = fixture();
+        let mut claim = OutputClaim::acquire(&roots).unwrap();
+        let sidecar = roots.output().join("._.binsith.lock");
+        let header = [0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00];
+        fs::write(&sidecar, header).unwrap();
+        Arc::get_mut(&mut claim.0).unwrap().lock_sidecar = claim_sidecar(roots.output()).unwrap();
+        claim.0.verify().unwrap();
+        fs::rename(&sidecar, roots.output().join("old-sidecar")).unwrap();
+        fs::write(&sidecar, header).unwrap();
+        assert!(claim.0.verify().is_err());
+        drop(claim);
+        assert_eq!(fs::read(sidecar).unwrap(), header);
+        assert!(roots.output().join(CLAIM_FILE).exists());
     }
 
     #[test]
