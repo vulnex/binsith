@@ -22,7 +22,7 @@ for directory in sorted(private_roots):
     if history:
         violations.append(f"private directory exists in reachable history: {directory}/")
 for filename in ("README.md", "RELEASE.md", "CHANGELOG.md"):
-    text = (root / filename).read_text()
+    text = (root / filename).read_text(encoding="utf-8")
     if re.search(r"\]\([^\n)]*(?:devnotes|evaluations)/", text, re.IGNORECASE):
         violations.append(f"{filename} links to private local material")
 if violations:
