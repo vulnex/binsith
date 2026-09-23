@@ -1,12 +1,18 @@
 # Changelog
 
-## Unreleased — native folder scanning
+## 0.5.0 — Unreleased
+
+Release preparation for native folder scanning. The implementation has passed hosted
+checks on macOS, Linux and Windows; this versioned release still requires its
+own final-commit verification and packages before publication.
 
 - Scan directories with bounded parallel workers, optional recursion, per-file JSON
   reports, an outcome journal and a batch manifest. Use a new or empty output
   directory for each run; published 0.4.2 packages do not include this mode.
 - Add periodic stderr progress, fail-fast admission, cooperative interruption and
-  a second-interrupt forced exit. Folder exit codes distinguish complete success
+  a second-interrupt forced-exit request. A kernel-blocked filesystem operation
+  may delay process exit even after the second interrupt. Folder exit codes
+  distinguish complete success
   (0), execution/coverage failure (1), setup failure (2) and interruption (130).
 - Preserve completed reports on partial failure; check input identity before
   publication and refuse report collisions. Process-crash recovery evidence does
@@ -14,13 +20,22 @@
 - Retain existing single-file behavior and schema compatibility. Folder artifacts
   use version 1 schemas and lossless relative-path identities; consumers should
   follow journal report locations instead of deriving filenames.
-- Reduce startup and regex-engine memory costs. Current-source macOS and Linux
-  runtime checks pass. All 28 local warm cases and 28 controlled write-latency
+- Reduce startup and regex-engine memory costs. macOS, Linux and Windows
+  runtime checks pass on the preceding development candidate. All 28 local warm
+  cases and 28 controlled write-latency
   combinations pass unchanged limits across retained observations. These are
   host-specific results, not a general speedup or physical-storage guarantee.
-- Native Windows folder runtime and physical-storage validation remain pending.
-  A new release version and final release qualification have not been selected
-  or completed.
+- Support folder output on the tested macOS FAT32 USB while retaining ownership
+  and overwrite checks. Physical FAT32 performance remains unqualified: many-file
+  tests timed out. Prefer local APFS output and temporary storage for this drive.
+- Explain unsupported atomic publication on filesystems such as the tested macOS
+  SMB mount. Direct output to that mount is unsupported; use local output or run
+  Binsith on the file server using its local path.
+- Verify Windows ACL, junction, long-path and console behavior in hosted CI. Keep
+  console-test fixtures sparse without allocating their multi-gigabyte logical
+  size, and stop CI immediately when a capability probe fails.
+- Provide unsigned native candidate packages with build identity and checksum
+  verification. Existing 0.4.2 release assets remain unchanged.
 
 ## 0.4.2 — 2026-09-19
 

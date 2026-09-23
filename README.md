@@ -12,6 +12,9 @@ It does not inspect executable headers, sections, imports, or entry points.
 See the [release notes](CHANGELOG.md) and [release procedure](RELEASE.md)
 for compatibility changes, packaging instructions, and promotion gates.
 
+This checkout prepares **0.5.0**, an unpublished folder-scanning release.
+The download examples below refer to the published 0.4.2 release.
+
 ## Performance and reliability
 
 - **Fast:** streaming analysis and configurable string/decoding limits keep large
@@ -620,10 +623,11 @@ BinSith is licensed under the [Apache License 2.0](LICENSE).
 
 ## Folder scanning (development)
 
-Directory scanning is available in the development build; it is not included in
-published 0.4.2 downloads. Build the current checkout with `cargo build --locked
+Directory scanning is available in the 0.5.0 source; it is not
+included in published 0.4.2 downloads. Build the current checkout with `cargo build --locked
 --release` and use `target/release/binsith` (or put that binary on your `PATH`).
-macOS and Linux runtime checks pass. Native Windows folder validation is pending.
+The preceding development candidate passed hosted macOS, Linux and Windows checks.
+The versioned release still needs its own final checks and packages before publication.
 
 ### Try a small folder
 
@@ -809,7 +813,7 @@ Reports and journals can contain local paths, extracted secrets, decoded text an
 surrounding evidence. Keep input, output and temporary storage in an appropriate
 location. BinSith does not execute scanned files or contact extracted addresses.
 
-The current scanner source has passing evidence for all 28 warm workload/worker
+Retained development measurements have passing evidence for all 28 warm workload/worker
 cases on the local macOS host under the frozen limits, including one noisy-case
 repeat. Controlled 10-microsecond per-write-delay observations now have passing evidence
 for all 28 combinations across retained runs, including quiet-host repeats of four

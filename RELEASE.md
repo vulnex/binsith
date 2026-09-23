@@ -1,10 +1,32 @@
 # Release procedure
 
-The published version is `0.4.2`. Native folder scanning is an **unreleased**
-change, even while Cargo still reports 0.4.2. Do not replace the published assets
-with this development build. Choose a new version only when qualifying its release.
+The published version remains `0.4.2`. This checkout prepares **`0.5.0`**,
+an unpublished release adding native folder scanning. Do not replace the published
+0.4.2 assets. Publish 0.5.0 only after its final committed inputs and packages pass
+the gates below.
 The supported role remains static triage with analyst review. See CHANGELOG.md
 for consumer-visible behavior changes.
+
+## 0.5.0 scope and qualification
+
+The preceding development candidate `195b803` passed all six hosted runtime,
+sanitizer and package jobs. Those results establish the implementation checkpoint;
+the version bump changes build metadata and the source fingerprint, so the 0.5.0
+commit must receive fresh CI and native packages. Do not relabel older archives.
+
+Retain these limitations in the release notes:
+
+- Physical FAT32 performance is unqualified. The tested USB encountered substantial
+  metadata latency and many-file timeouts. Prefer local APFS output and scratch.
+- Direct output on the tested macOS SMB mount is unsupported because safe atomic
+  no-replace publication is unavailable. Use local output or server-side scanning.
+- A second interrupt may wait for kernel-blocked filesystem I/O; immediate process
+  disappearance is not guaranteed. Completed reports remain useful, but interruption
+  can leave an incomplete batch and a stale output claim.
+- Packages are unsigned; checksums detect corruption, not publisher authenticity.
+
+Confirm the remaining storage scope at promotion. Preparing these notes does not
+mark incomplete physical-storage measurements as passing or authorize publication.
 
 ## Local verification
 
@@ -52,8 +74,9 @@ write-latency matrices, and run the physical-storage procedure in
 [the storage runbook](devnotes/benchmarks/folder-storage-validation.md) on an
 appropriate data volume. Synthetic sleeps do not close physical-storage coverage.
 Do not promote an inconclusive noisy case as a pass; preserve original and repeated
-observations. Do not turn development validation claims into published-release
-claims while Windows/storage gaps are open.
+observations. If physical coverage cannot be completed, explicitly accept and
+document that release scope before promotion. Hosted Windows checks now pass on
+the development candidate; rerun them on the versioned 0.5.0 commit.
 
 The [folder readiness review](devnotes/folder-release-readiness.md) records current
 local evidence and outstanding work. It is a development checkpoint, not permission
