@@ -22,6 +22,7 @@ pub enum Step {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Point {
+    ClaimCreated,
     WorkerSpawn,
     ScanStart,
     QueueSaturated,
