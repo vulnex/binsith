@@ -74,6 +74,31 @@ pathlib.Path(sys.argv[-1]).write_text(json.dumps(body))
                     materialize_input(source, root / 'full')
             self.assertFalse((root / 'full').exists())
 
+    def test_private_fixture_copy_removes_only_new_valid_appledouble(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, destination = root / 'source', root / 'input'
+            source.write_bytes(b'corpus bytes')
+            companion = root / '._input'
+
+            def copy_with_companion(src, dst):
+                Path(dst).write_bytes(Path(src).read_bytes())
+                companion.write_bytes(bytes.fromhex('0005160700020000') + b'metadata')
+
+            with patch('benchmark_native_folder.platform.system', return_value='Darwin'), \
+                 patch('benchmark_native_folder.os.link', side_effect=OSError(errno.ENOTSUP, 'unsupported')), \
+                 patch('benchmark_native_folder.shutil.copyfile', side_effect=copy_with_companion):
+                self.assertEqual(materialize_input(source, destination), 'copy')
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            self.assertFalse(companion.exists())
+
+            destination.unlink()
+            companion.write_bytes(b'preexisting')
+            with self.assertRaises(FileExistsError):
+                materialize_input(source, destination)
+            self.assertEqual(companion.read_bytes(), b'preexisting')
+            self.assertFalse(destination.exists())
+
     def test_both_fingerprint_formats_are_verified_before_normalization(self):
         legacy, native = pattern_hashes(True)
         self.assertEqual(legacy, '63f03ec8427708e3cbcf03a4d4d63b1ecd6b4058c4a45fd8475386e5478c3699')

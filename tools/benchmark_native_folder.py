@@ -214,15 +214,29 @@ def existing_directory(value):
 
 
 def materialize_input(source, destination):
-    """Prefer links; support data volumes without hardlinks outside timed trials."""
+    """Create a fresh private corpus file without synthetic metadata companions."""
+    companion = destination.with_name('._' + destination.name)
+    if os.path.lexists(destination) or os.path.lexists(companion):
+        raise FileExistsError(errno.EEXIST, 'fixture destination already exists', str(destination))
     try:
         os.link(source, destination)
-        return 'hardlink'
+        method = 'hardlink'
     except OSError as error:
         if error.errno not in (errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP):
             raise
         shutil.copyfile(source, destination)
-        return 'copy'
+        method = 'copy'
+    # macOS can add com.apple.provenance even for data-only copies on FAT32.
+    # Only this newly created private fixture companion may be removed. The
+    # scanner itself still includes hidden files, and user inputs are untouched.
+    if platform.system() == 'Darwin' and os.path.lexists(companion):
+        if companion.is_symlink() or not companion.is_file():
+            raise ValueError('unexpected fixture companion type')
+        with companion.open('rb') as metadata:
+            if metadata.read(8) != bytes.fromhex('0005160700020000'):
+                raise ValueError('unexpected fixture companion header')
+        companion.unlink()
+    return method
 
 
 def main():
@@ -257,7 +271,7 @@ def main():
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=5, work_directory=str(work_parent),
+        settings=dict(adapter_version=6, work_directory=str(work_parent),
                       work_device=work_parent.stat().st_dev, write_delay_us=args.write_delay_us,
                       write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
                       write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
@@ -279,11 +293,18 @@ def main():
         root = Path(temporary).resolve()
         source = root / 'source'
         source.mkdir()
-        tiny = [write_sample(source / f'tiny-{i}.bin', 64 * 1024, i) for i in range(128)]
-        large = [write_sample(source / 'large.bin', 32 * 1024**2, 128)]
-        dense = [write_sample(source / f'dense-{i}.bin', 256 * 1024, 129+i, 'dense') for i in range(16)]
-        long = [write_sample(source / 'long.bin', 32 * 1024**2, 0, 'long')]
-        decode = [write_sample(source / f'decode-{i}.bin', 128 * 1024, i, 'decode') for i in range(32)]
+        selected = set(args.workloads or ('tiny_strings', 'large_summary', 'mixed_strings',
+            'dense_strings', 'long_strings', 'decoding', 'extra_passes'))
+        tiny = ([write_sample(source / f'tiny-{i}.bin', 64 * 1024, i) for i in range(128)]
+            if selected & {'tiny_strings', 'mixed_strings'} else [])
+        large = ([write_sample(source / 'large.bin', 32 * 1024**2, 128)]
+            if selected & {'large_summary', 'mixed_strings', 'extra_passes'} else [])
+        dense = ([write_sample(source / f'dense-{i}.bin', 256 * 1024, 129+i, 'dense') for i in range(16)]
+            if 'dense_strings' in selected else [])
+        long = ([write_sample(source / 'long.bin', 32 * 1024**2, 0, 'long')]
+            if 'long_strings' in selected else [])
+        decode = ([write_sample(source / f'decode-{i}.bin', 128 * 1024, i, 'decode') for i in range(32)]
+            if 'decoding' in selected else [])
         corpora = {'tiny_strings': (tiny, ['-s']), 'large_summary': (large, ['-i']),
             'mixed_strings': (tiny+large, ['-s']), 'dense_strings': (dense, ['-s']),
             'long_strings': (long, ['-s', '--max-string-bytes', '4096']),
