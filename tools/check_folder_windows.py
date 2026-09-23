@@ -97,6 +97,12 @@ def long_paths(binary, base):
     return {'status': 'passed', 'path_characters': len(str(parent / 'sample')), 'counters': counters}
 
 
+class FileStandardInfo(ctypes.Structure):
+    _fields_ = [('allocation_size', ctypes.c_longlong), ('end_of_file', ctypes.c_longlong),
+                ('links', wintypes.DWORD), ('delete_pending', ctypes.c_ubyte),
+                ('directory', ctypes.c_ubyte)]
+
+
 def kernel():
     api = ctypes.WinDLL('kernel32', use_last_error=True)
     api.GetConsoleCP.argtypes = []
@@ -108,11 +114,42 @@ def kernel():
         wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
         ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
     api.DeviceIoControl.restype = wintypes.BOOL
+    api.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong,
+                                    ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD]
+    api.SetFilePointerEx.restype = wintypes.BOOL
+    api.SetEndOfFile.argtypes = [wintypes.HANDLE]
+    api.SetEndOfFile.restype = wintypes.BOOL
+    api.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                                wintypes.LPVOID, wintypes.DWORD]
+    api.GetFileInformationByHandleEx.restype = wintypes.BOOL
     return api
 
 
-def console_interrupt(binary, base):
+def sparse_fixture(api, path, length):
     import msvcrt
+    with path.open('xb') as stream:
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        returned = wintypes.DWORD()
+        # FSCTL_SET_SPARSE from winioctl.h.
+        if not api.DeviceIoControl(handle, 590020, None, 0, None, 0,
+                                   ctypes.byref(returned), None):
+            return {'status': 'skipped',
+                    'reason': f'sparse fixture unavailable: {ctypes.get_last_error()}'}
+        # Python/CRT truncate may write zeros while extending a file, defeating
+        # sparse allocation. Move the native pointer and set EOF without writes.
+        if not api.SetFilePointerEx(handle, length, None, 0) or not api.SetEndOfFile(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+        info = FileStandardInfo()
+        # FileStandardInfo = 1. Verify allocation before starting the scanner.
+        if not api.GetFileInformationByHandleEx(handle, 1, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if info.end_of_file != length or info.allocation_size != 0:
+            raise AssertionError(f'fixture is not an unallocated sparse file: '
+                                 f'length={info.end_of_file}, allocation={info.allocation_size}')
+        return {'logical_bytes': info.end_of_file, 'allocated_bytes': info.allocation_size}
+
+
+def console_interrupt(binary, base):
     api = kernel()
     allocated = False
     child = None
@@ -123,14 +160,12 @@ def console_interrupt(binary, base):
     try:
         root, output = base / 'console-input', base / 'console-output'
         root.mkdir()
+        fixtures = []
         for index in range(5):
-            with (root / str(index)).open('wb') as stream:
-                returned = wintypes.DWORD()
-                # FSCTL_SET_SPARSE from winioctl.h. Do not allocate physical GiBs.
-                if not api.DeviceIoControl(msvcrt.get_osfhandle(stream.fileno()), 590020,
-                        None, 0, None, 0, ctypes.byref(returned), None):
-                    return {'status': 'skipped', 'reason': f'sparse fixture unavailable: {ctypes.get_last_error()}'}
-                stream.truncate(8 * 1024**3)
+            fixture = sparse_fixture(api, root / str(index), 8 * 1024**3)
+            if fixture.get('status') == 'skipped':
+                return fixture
+            fixtures.append(fixture)
         # New process group shares this console. CTRL_BREAK is scoped to the
         # child's group; never broadcast CTRL_C/CTRL_BREAK to group zero.
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -168,7 +203,8 @@ def console_interrupt(binary, base):
             terminals = [r for r in records if r['record_type'] == 'terminal']
             assert {r['entry_id'] for r in terminals} == admissions
             assert all(r['outcome']['status'] == 'cancelled' for r in terminals)
-            return {'status': 'passed', 'event': 'targeted CTRL_BREAK_EVENT', 'counters': manifest['counters']}
+            return {'status': 'passed', 'event': 'targeted CTRL_BREAK_EVENT',
+                    'counters': manifest['counters'], 'fixtures': fixtures}
     finally:
         if child is not None and child.poll() is None:
             child.kill()
