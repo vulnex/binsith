@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Measure Windows export benchmark peak working set from the completed child,
+  and reject unavailable counters instead of reporting a memory-budget pass.
+
 - Fix Windows batch-export completion publication while retaining directory
   protection and rejecting existing or changed completion manifests.
 
