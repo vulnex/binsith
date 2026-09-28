@@ -320,8 +320,9 @@ impl Root {
         };
         Ok(file)
     }
-    pub(super) fn publish_manifest(&self) -> Result<()> {
+    pub(super) fn publish_manifest(&self, expected: &Snapshot) -> Result<()> {
         self.check()?;
+        self.verify(".manifest.pending", expected)?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         rustix::fs::renameat_with(
             &self.file,
@@ -333,27 +334,60 @@ impl Root {
         .map_err(std::io::Error::from)?;
         #[cfg(windows)]
         {
-            use std::os::windows::ffi::OsStrExt;
-            let old: Vec<u16> = self
-                .path
-                .join(".manifest.pending")
-                .as_os_str()
-                .encode_wide()
-                .chain(Some(0))
-                .collect();
-            let new: Vec<u16> = self
-                .path
-                .join("manifest.json")
-                .as_os_str()
-                .encode_wide()
-                .chain(Some(0))
-                .collect();
-            // SAFETY: both buffers are NUL-terminated and live for this call.
-            if unsafe {
-                windows_sys::Win32::Storage::FileSystem::MoveFileExW(old.as_ptr(), new.as_ptr(), 0)
-            } == 0
-            {
-                return Err(std::io::Error::last_os_error().into());
+            use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+            use windows_sys::{
+                Wdk::Storage::FileSystem::{
+                    FileRenameInformation, NtSetInformationFile, FILE_RENAME_INFORMATION,
+                },
+                Win32::{
+                    Foundation::RtlNtStatusToDosError,
+                    Storage::FileSystem::{
+                        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+                    },
+                    System::IO::IO_STATUS_BLOCK,
+                },
+            };
+            let pending = std::fs::OpenOptions::new()
+                .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+                .share_mode(FILE_SHARE_READ)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(self.path.join(".manifest.pending"))?;
+            classify(&pending, false)?;
+            if Snapshot::opened(&pending)? != *expected {
+                return Err(invalid("completion manifest changed before publication"));
+            }
+            // A simple native filename with a NULL RootDirectory renames within
+            // the opened file's directory. Path-based Win32 rename reopens that
+            // directory for write access, conflicting with our retained guards.
+            // Keep those guards and the pending-file handle throughout publication.
+            let name: Vec<u16> = "manifest.json".encode_utf16().collect();
+            let bytes = std::mem::size_of::<FILE_RENAME_INFORMATION>() + name.len() * 2;
+            // usize storage supplies the alignment required by the native struct.
+            let mut storage = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
+            let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+            let mut status_block = IO_STATUS_BLOCK::default();
+            // SAFETY: the zeroed, aligned buffer contains the struct and full name;
+            // zero means no replacement and no root handle. All buffers and the
+            // synchronous file handle remain live until the system call returns.
+            let status = unsafe {
+                (*info).FileNameLength = (name.len() * 2) as u32;
+                std::ptr::copy_nonoverlapping(
+                    name.as_ptr(),
+                    std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+                    name.len(),
+                );
+                NtSetInformationFile(
+                    pending.as_raw_handle(),
+                    &mut status_block,
+                    info.cast(),
+                    bytes as u32,
+                    FileRenameInformation,
+                )
+            };
+            if status < 0 {
+                // SAFETY: accepts any NTSTATUS; does not access caller memory.
+                let code = unsafe { RtlNtStatusToDosError(status) };
+                return Err(std::io::Error::from_raw_os_error(code as i32).into());
             }
         }
         #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
@@ -374,5 +408,66 @@ impl Root {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn pending(root: &Root) -> Snapshot {
+        let mut file = root.create_file(".manifest.pending").unwrap();
+        file.write_all(b"synthetic completion").unwrap();
+        Snapshot::opened(&file).unwrap()
+    }
+
+    #[test]
+    fn publication_rejects_changed_pending_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Root::open(&temp.path().canonicalize().unwrap()).unwrap();
+        let stamp = pending(&root);
+        std::fs::write(temp.path().join(".manifest.pending"), b"changed").unwrap();
+        assert!(root.publish_manifest(&stamp).is_err());
+        assert!(!temp.path().join("manifest.json").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn publication_retains_directory_guards_and_never_replaces() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        for collision in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Root::open(&temp.path().canonicalize().unwrap()).unwrap();
+            let stamp = pending(&root);
+            let destination = temp.path().join("manifest.json");
+            if collision {
+                std::fs::write(&destination, b"existing").unwrap();
+            }
+            let try_write_directory = || {
+                std::fs::OpenOptions::new()
+                    .access_mode(FILE_WRITE_DATA)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                    .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                    .open(temp.path())
+            };
+            assert_eq!(try_write_directory().unwrap_err().raw_os_error(), Some(32));
+            let result = root.publish_manifest(&stamp);
+            assert_eq!(result.is_err(), collision, "{result:?}");
+            assert_eq!(try_write_directory().unwrap_err().raw_os_error(), Some(32));
+            assert_eq!(
+                std::fs::read(destination).unwrap(),
+                if collision {
+                    &b"existing"[..]
+                } else {
+                    &b"synthetic completion"[..]
+                }
+            );
+            assert_eq!(temp.path().join(".manifest.pending").exists(), collision);
+            drop(root);
+            // Establish that the denied write was caused by the guard, not ACLs.
+            assert!(try_write_directory().is_ok());
+        }
     }
 }
