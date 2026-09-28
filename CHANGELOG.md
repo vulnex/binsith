@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep batch-export-only options out of legacy single-file report metadata,
+  preserving the v0.5 configuration shape.
+
 - Add native-to-native folder benchmark comparisons with the existing frozen
   performance gates, paired runs and report-equivalence checks.
 

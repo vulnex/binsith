@@ -732,6 +732,9 @@ fn coverage_exit_precedence_and_metadata() {
         1
     );
     assert_eq!(json["metadata"]["version"], env!("CARGO_PKG_VERSION"));
+    for batch_only in ["batch_input", "batch_csv", "batch_validation"] {
+        assert!(json["metadata"]["configuration"].get(batch_only).is_none());
+    }
     assert_eq!(
         json["metadata"]["configuration"]["inconclusive_exit_code"],
         9

@@ -33,12 +33,15 @@ struct Args {
     folder: binsith::batch::cli::FolderOptions,
     /// Import one completed batch into a new offline indicator bundle
     #[arg(long, requires = "output_dir", conflicts_with_all = ["file", "list_categories"])]
+    #[serde(skip)]
     batch_input: Option<std::path::PathBuf>,
     /// Include raw indicator CSV alongside authoritative JSON (values are untrusted)
     #[arg(long, requires = "batch_input")]
+    #[serde(skip)]
     batch_csv: bool,
     /// Filter combined indicators by their recorded validation status
     #[arg(long, value_enum, default_value = "all", requires = "batch_input")]
+    #[serde(skip)]
     batch_validation: binsith::batch::export::ValidationFilter,
     /// Input file or directory, or - for standard input
     #[arg(required_unless_present_any = ["list_categories", "batch_input"])]
