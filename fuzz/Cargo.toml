@@ -8,6 +8,8 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
+binsith = { path = ".." }
+tempfile = "3"
 libfuzzer-sys = "0.4"
 regex = { version = "1.5", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-backtrack", "perf-inline", "perf-literal"] }
 toml = "0.5"
@@ -28,6 +30,20 @@ bench = false
 [[bin]]
 name = "batch-json"
 path = "fuzz_targets/batch_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "selection"
+path = "fuzz_targets/selection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "batch-import"
+path = "fuzz_targets/batch_import.rs"
 test = false
 doc = false
 bench = false

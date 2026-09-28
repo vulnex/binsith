@@ -36,7 +36,7 @@ rustup toolchain install nightly --profile minimal
 cargo install cargo-fuzz --version 0.13.2 --locked --root target/fuzz-tools
 mkdir -p fuzz/corpus/strings
 cp fuzz/seeds/strings/* fuzz/corpus/strings/
-RUSTUP_TOOLCHAIN=nightly target/fuzz-tools/bin/cargo-fuzz run strings fuzz/corpus/strings -- -max_total_time=30 -max_len=8192 -timeout=5 -rss_limit_mb=1024 -seed=45335
+RUSTUP_TOOLCHAIN=nightly target/fuzz-tools/bin/cargo-fuzz fuzz run strings fuzz/corpus/strings -- -max_total_time=30 -max_len=8192 -timeout=5 -rss_limit_mb=1024 -seed=45335
 ```
 
 Commands run from the repository root. AddressSanitizer is enabled by cargo-fuzz's
@@ -51,7 +51,7 @@ seeds unchanged; copy a confirmed reproducer to the curated corpus and add a
 focused Rust regression test after investigating it. Reproduce a saved artifact:
 
 ```sh
-RUSTUP_TOOLCHAIN=nightly target/fuzz-tools/bin/cargo-fuzz run strings fuzz/artifacts/strings/CRASH_FILE
+RUSTUP_TOOLCHAIN=nightly target/fuzz-tools/bin/cargo-fuzz fuzz run strings fuzz/artifacts/strings/CRASH_FILE
 ```
 
 The process exits unsuccessfully on a panic, sanitizer error, timeout, or RSS-limit
@@ -60,3 +60,29 @@ executions performed; it does not establish exhaustive coverage or correctness.
 Record toolchain versions, build identity, campaign arguments, and the final fuzzer
 statistics when comparing runs. The target tests parser logic; process cancellation,
 I/O failures, and report publication are covered by the ordinary test suite.
+
+## v0.6 artifact and selection targets
+
+- `batch-json`: bounded streaming JSON guard; acceptance is checked against serde_json.
+- `selection`: native-glob compiler and matcher, boundary sizes, both pattern-encoding
+  grammars, and an independent regex oracle for single-component ASCII wildcards.
+  Native non-ASCII Windows matching still needs Windows runtime tests.
+- `batch-import`: mutation of synthetic manifest/journal/report bytes followed by
+  full reader, aggregation and bundle publication. A rejected import must not leave
+  a completion manifest; published payload receipts are recomputed. Every execution
+  uses private disposable directories and supplies no original sample files.
+
+The latter targets use the actual local library through a path dependency. Their
+locked dependencies remain aligned with the CLI. Copy seeds from the matching
+`fuzz/seeds/selection` or `fuzz/seeds/batch_import` folder. The target uses a hyphen
+(`batch-import`), while its corpus directory uses an underscore (`batch_import`).
+CI runs short single-worker sanitizer smokes only. Whole-import input mutations are
+capped at 8 KiB; reader limits are reduced to 16 entries, 1 MiB imported bytes and
+4 MiB scratch. This does not qualify the production-size budgets. No seeded input
+is executed as a sample, and no discovered URL is fetched. Temporary filesystem
+errors cause target failure and need environment triage before claiming a parser bug.
+
+Long campaigns require the qualification resource budget to be agreed first. Omit
+`-runs` for a duration-based campaign; record actual time/executions, seed, sanitizer,
+coverage counters, toolchain/build identity and any failures. Fuzz reports/corpora
+stay local unless an individual synthetic regression is reviewed for publication.

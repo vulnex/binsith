@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add sanitizer fuzz targets for native-glob selection and full completed-batch
+  import/export, plus synthetic RSS/scratch/throughput benchmark tooling.
+  Long campaigns and native release qualification remain separate gates.
+
 - Add summary rankings by distinct file entries, bounded source-report navigation,
   shared-key counts, selected-range byte totals and explicit outcome reasons.
   Preserve null unavailable totals and distinguish presentation caps from analysis

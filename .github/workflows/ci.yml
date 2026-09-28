@@ -92,3 +92,12 @@ jobs:
         run: mkdir -p fuzz/corpus/batch_json && cp fuzz/seeds/batch_json/* fuzz/corpus/batch_json/
       - name: Bounded batch JSON sanitizer fuzz smoke
         run: cargo +nightly fuzz run batch-json fuzz/corpus/batch_json -- -max_total_time=15 -runs=10000 -max_len=65536 -timeout=5 -rss_limit_mb=1024 -seed=45336
+      - name: Seed selection and completed-batch fuzzing
+        run: |
+          mkdir -p fuzz/corpus/selection fuzz/corpus/batch_import
+          cp fuzz/seeds/selection/* fuzz/corpus/selection/
+          cp fuzz/seeds/batch_import/* fuzz/corpus/batch_import/
+      - name: Bounded selection sanitizer fuzz smoke
+        run: cargo +nightly fuzz run selection fuzz/corpus/selection -- -max_total_time=15 -runs=10000 -max_len=8192 -timeout=5 -rss_limit_mb=1024 -seed=45337
+      - name: Bounded completed-batch sanitizer fuzz smoke
+        run: cargo +nightly fuzz run batch-import fuzz/corpus/batch_import -- -max_total_time=15 -runs=1000 -max_len=8192 -timeout=5 -rss_limit_mb=1024 -seed=45338

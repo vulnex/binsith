@@ -1010,3 +1010,26 @@ inputs.
 Follow-up diagnostics found variable delays in filesystem synchronization and metadata operations on
 this USB. An experimental synchronization change did not reliably eliminate the
 timeouts and was not adopted.
+
+
+### Offline export qualification tooling (unreleased)
+
+`tools/benchmark_batch_export.py` measures a fresh export process against synthetic
+completed-batch artifacts, with duplicate-heavy, high-cardinality and large-finding
+shapes. It checks bundle receipts, count reconciliation and semantic determinism
+across repeated runs, recording elapsed time, child peak RSS (when supported),
+scratch high-water usage and output bytes. Generation is outside measured time;
+cache state is warm/uncontrolled. Synthetic artifact multiplication is a reader
+stress test, not a scanner detection/recall test.
+
+```sh
+python3 tools/benchmark_batch_export.py --entries 1000 --runs 3 --output target/export-baseline.json
+python3 tools/benchmark_batch_export.py --entries 5000 --shape cardinality --runs 3 --output target/export-cardinality.json
+```
+
+Results include local platform/build identity; keep them local. Use a fresh result
+filename for each run. The tool reports the 256 MiB qualification RSS target, marks
+missing RSS measurements inconclusive, and records throughput as a baseline rather
+than claiming a frozen acceptance threshold. Larger cases, native runtime checks,
+extended fuzzing and final package identity remain release qualification gates.
+See [fuzz targets and resource limits](fuzz/README.md) for short sanitizer smokes.
