@@ -49,7 +49,7 @@ impl Run {
         Ok(BufReader::new(File::open(&self.path)?))
     }
 }
-struct Writer {
+pub(super) struct Writer {
     file: BufWriter<File>,
     path: Option<tempfile::TempPath>,
     bytes: u64,
@@ -61,7 +61,7 @@ impl Drop for Writer {
     }
 }
 impl Writer {
-    fn new(scratch: Scratch) -> Result<Self> {
+    pub fn new(scratch: Scratch) -> Result<Self> {
         let (file, path) = tempfile::NamedTempFile::new()?.into_parts();
         Ok(Self {
             file: BufWriter::new(file),
@@ -70,9 +70,12 @@ impl Writer {
             scratch,
         })
     }
-    fn row(&mut self, row: &Row) -> Result<()> {
+    pub fn row(&mut self, row: &Row) -> Result<()> {
         if self.scratch.token.is_cancelled() {
             return Err(Error::Interrupted);
+        }
+        if row.0.len() > 65536 || row.1.len() > 16 * 1024 * 1024 {
+            return Err(invalid("scratch record limit exceeded"));
         }
         let size = 8 + row.0.len() as u64 + row.1.len() as u64;
         if size > self.scratch.cap.saturating_sub(self.scratch.used.get()) {
@@ -89,7 +92,7 @@ impl Writer {
         self.file.write_all(&row.1)?;
         Ok(())
     }
-    fn finish(mut self) -> Result<Run> {
+    pub fn finish(mut self) -> Result<Run> {
         self.file.flush()?;
         Ok(Run {
             path: self.path.take().unwrap(),
@@ -108,7 +111,7 @@ pub(super) fn next(reader: &mut impl Read) -> Result<Option<Row>> {
     reader.read_exact(&mut lengths[1..])?;
     let key = u32::from_le_bytes(lengths[..4].try_into().unwrap()) as usize;
     let value = u32::from_le_bytes(lengths[4..].try_into().unwrap()) as usize;
-    if key > 65536 || value > 1024 * 1024 {
+    if key > 65536 || value > 16 * 1024 * 1024 {
         return Err(invalid("invalid scratch record size"));
     }
     let mut k = vec![0; key];

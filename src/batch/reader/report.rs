@@ -52,13 +52,13 @@ fn hash(v: &str, size: usize) -> bool {
 /// Bounded capture for small metadata and individual match details, never report
 /// arrays or whole findings. Account node overhead as well as decoded text.
 #[derive(Default)]
-struct Capture {
+pub(super) struct Capture {
     stack: Vec<(Option<Segment>, Value)>,
     bytes: usize,
-    value: Option<Value>,
+    pub(super) value: Option<Value>,
 }
 impl Capture {
-    fn event(&mut self, path: &[Segment], event: Event) -> Result<()> {
+    pub(super) fn event(&mut self, path: &[Segment], event: Event) -> Result<()> {
         let cost = match &event {
             Event::Scalar(Value::String(s)) => s.len(),
             _ => 0,
@@ -259,6 +259,15 @@ pub(super) fn validate(
     manifest: &Manifest,
     record: &JournalRecord,
 ) -> Result<()> {
+    validate_events(input, manifest, record, |_, _| Ok(()))
+}
+
+pub(super) fn validate_events(
+    input: impl BufRead,
+    manifest: &Manifest,
+    record: &JournalRecord,
+    mut visit: impl FnMut(&[Segment], &Event) -> Result<()>,
+) -> Result<()> {
     let JournalEvent::Terminal { outcome } = &record.event else {
         return Err(invalid("report lacks terminal"));
     };
@@ -281,6 +290,7 @@ pub(super) fn validate(
     let mut matched = false;
     let mut counts = [0_u64; 4];
     Parser::new(input).parse(|path, event| {
+        visit(path, &event)?;
         if path.is_empty() {
             return if matches!(event, Event::ObjectStart | Event::ObjectEnd) {
                 Ok(())

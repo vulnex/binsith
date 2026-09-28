@@ -1,0 +1,183 @@
+{
+  "counts": {
+    "file_entries": 1,
+    "filtered_observations": 0,
+    "location_observations_omitted": 0,
+    "observed_occurrences": 4,
+    "reason_observations_omitted": 0,
+    "retained_unique_keys": 3,
+    "source_counters": {
+      "active": 0,
+      "cancelled": 0,
+      "complete": 1,
+      "discovery_errors": 0,
+      "eligible": 1,
+      "failed": 0,
+      "files_with_indicators": 1,
+      "limited": 0,
+      "limited_files_with_indicators": 0,
+      "observed_entries": 1,
+      "policy_skipped": 0,
+      "queued": 0
+    },
+    "total_unique_keys": 3,
+    "unreferenced_artifact_entries": 0,
+    "unretained_key_observations": 0,
+    "upstream_omitted_details": {},
+    "selected_bytes": {
+      "reported_total": 65,
+      "reported_entries": 1,
+      "unreported_eligible_entries": 0,
+      "eligible_total": 65
+    }
+  },
+  "coverage": {
+    "aggregation": "complete",
+    "discovery": "complete",
+    "import": "valid_complete_batch",
+    "presentation": "all",
+    "scan": "complete_within_configured_scope",
+    "selection": "all_eligible",
+    "string_analysis": "enabled"
+  },
+  "kind": "batch_summary",
+  "processing_complete": true,
+  "schema_version": 1,
+  "scope": {
+    "configuration": {
+      "analysis": {
+        "categories": [],
+        "decode_depth": 1,
+        "encoding": "auto",
+        "entropy": false,
+        "entropy_threshold": 7.0,
+        "entropy_window": 4096,
+        "length": null,
+        "matches_only": false,
+        "max_decode_bytes": 262144,
+        "max_string_bytes": 1048576,
+        "min_length": 4,
+        "no_decode": false,
+        "offset": 0,
+        "scan_utf16": false,
+        "strings": true
+      },
+      "fail_fast": false,
+      "jobs": 1,
+      "patterns_sha256": "89bb2d31a928db22b3a83739954a03741a633caec42762dc01daf20f1c9bf35e",
+      "recursive": false,
+      "work_queue_capacity": 2
+    },
+    "enumeration_policy": "observed_entries_v1",
+    "selection": null
+  },
+  "source_batch_id": "released-v0.5-synthetic",
+  "validation_filter": "all",
+  "ranking": {
+    "scope": "retained_keys",
+    "order": "distinct_file_entries_desc_then_category_value_status_utf8",
+    "retained_keys_considered": 3,
+    "retained_shared_keys": 0,
+    "keys_not_shown": 0,
+    "key_admission_saturated": false,
+    "indicator_artifact": "indicators.json",
+    "source_location_base": "source_batch_root",
+    "entries": [
+      {
+        "rank": 1,
+        "indicator_index": 0,
+        "category": "URL",
+        "value": "https://example.org/decoded",
+        "validation_status": "validated",
+        "distinct_file_entries": 1,
+        "observed_occurrences": 1,
+        "source_entries_not_shown": 0,
+        "source_samples": [
+          {
+            "path": {
+              "encoding": "unix-bytes-base64",
+              "value": "c2FtcGxlLnR4dA=="
+            },
+            "report_id": "9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788",
+            "report_location": "results/9d/9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788.json",
+            "source_offset": 28,
+            "source_end_offset": 64,
+            "source_encoding": "ASCII",
+            "extraction": "text",
+            "decode_depth": 1,
+            "decode_encoding": "base64",
+            "decoded_offset": 0,
+            "decoded_end_offset": 27
+          }
+        ]
+      },
+      {
+        "rank": 2,
+        "indicator_index": 1,
+        "category": "URL",
+        "value": "https://example.org/fixture",
+        "validation_status": "validated",
+        "distinct_file_entries": 1,
+        "observed_occurrences": 1,
+        "source_entries_not_shown": 0,
+        "source_samples": [
+          {
+            "path": {
+              "encoding": "unix-bytes-base64",
+              "value": "c2FtcGxlLnR4dA=="
+            },
+            "report_id": "9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788",
+            "report_location": "results/9d/9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788.json",
+            "source_offset": 0,
+            "source_end_offset": 27,
+            "source_encoding": "ASCII",
+            "extraction": "text",
+            "decode_depth": 0,
+            "decode_encoding": null,
+            "decoded_offset": null,
+            "decoded_end_offset": null
+          }
+        ]
+      },
+      {
+        "rank": 3,
+        "indicator_index": 2,
+        "category": "file_path",
+        "value": "/example.org",
+        "validation_status": "invalid",
+        "distinct_file_entries": 1,
+        "observed_occurrences": 2,
+        "source_entries_not_shown": 0,
+        "source_samples": [
+          {
+            "path": {
+              "encoding": "unix-bytes-base64",
+              "value": "c2FtcGxlLnR4dA=="
+            },
+            "report_id": "9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788",
+            "report_location": "results/9d/9d511e2a5125b6f8bd242d8451cf8016aa80e6325a839712ef7e997dbc3e3788.json",
+            "source_offset": 7,
+            "source_end_offset": 19,
+            "source_encoding": "ASCII",
+            "extraction": "text",
+            "decode_depth": 0,
+            "decode_encoding": null,
+            "decoded_offset": null,
+            "decoded_end_offset": null
+          }
+        ]
+      }
+    ]
+  },
+  "outcome_reasons": {
+    "entries": [],
+    "unretained_reason_entries": 0,
+    "unvisited_descendants": "unknown_not_counted"
+  },
+  "presentation_limits": {
+    "keys": 20,
+    "sources_per_key": 8,
+    "reason_keys": 128,
+    "reason_bytes": 65536
+  }
+}

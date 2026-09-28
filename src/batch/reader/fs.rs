@@ -236,3 +236,143 @@ impl CheckedFile {
         Ok(())
     }
 }
+
+impl Root {
+    /// Exclusive destination with a guarded existing parent. Never create through
+    /// symlinks or reuse a directory; compare ancestor identities as well as names.
+    pub(super) fn create_output(&self, destination: &Path) -> Result<Self> {
+        let name = destination
+            .file_name()
+            .ok_or_else(|| invalid("invalid export destination"))?;
+        let parent_path = destination
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let parent = Self::open(parent_path)?;
+        let source = self.path.canonicalize()?;
+        let candidate = parent.path.canonicalize()?.join(name);
+        if candidate.starts_with(&source) || source.starts_with(&candidate) {
+            return Err(invalid("export destination overlaps source batch"));
+        }
+        for ancestor in std::iter::once(&parent.file).chain(parent._parents.iter()) {
+            if Snapshot::opened(ancestor)?.same_identity(&self.identity) {
+                return Err(invalid("export destination is inside source batch"));
+            }
+        }
+        #[cfg(unix)]
+        rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::from_raw_mode(0o700)).map_err(
+            |e| {
+                let e = std::io::Error::from(e);
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    invalid("export destination already exists")
+                } else {
+                    e.into()
+                }
+            },
+        )?;
+        #[cfg(windows)]
+        std::fs::create_dir(&candidate).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                invalid("export destination already exists")
+            } else {
+                e.into()
+            }
+        })?;
+        parent.check()?;
+        let result = Self::open(&candidate)?;
+        #[cfg(unix)]
+        if !Snapshot::opened(&child(&parent.file, name, true)?)?.same_identity(&result.identity) {
+            return Err(invalid("export destination changed during creation"));
+        }
+        Ok(result)
+    }
+    pub(super) fn create_file(&self, name: &str) -> Result<File> {
+        self.check()?;
+        // Callers supply fixed bundle basenames, never sample paths.
+        if !matches!(
+            name,
+            "indicators.json" | "indicators.csv" | "summary.json" | ".manifest.pending"
+        ) {
+            return Err(invalid("invalid bundle filename"));
+        }
+        #[cfg(unix)]
+        let file = File::from(
+            rustix::fs::openat(
+                &self.file,
+                name,
+                rustix::fs::OFlags::WRONLY
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .map_err(std::io::Error::from)?,
+        );
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .share_mode(0)
+                .open(self.path.join(name))?
+        };
+        Ok(file)
+    }
+    pub(super) fn publish_manifest(&self) -> Result<()> {
+        self.check()?;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        rustix::fs::renameat_with(
+            &self.file,
+            ".manifest.pending",
+            &self.file,
+            "manifest.json",
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let old: Vec<u16> = self
+                .path
+                .join(".manifest.pending")
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let new: Vec<u16> = self
+                .path
+                .join("manifest.json")
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            // SAFETY: both buffers are NUL-terminated and live for this call.
+            if unsafe {
+                windows_sys::Win32::Storage::FileSystem::MoveFileExW(old.as_ptr(), new.as_ptr(), 0)
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+        {
+            rustix::fs::linkat(
+                &self.file,
+                ".manifest.pending",
+                &self.file,
+                "manifest.json",
+                rustix::fs::AtFlags::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            // Completion is committed; pending-file cleanup cannot change success.
+            let _ = rustix::fs::unlinkat(
+                &self.file,
+                ".manifest.pending",
+                rustix::fs::AtFlags::empty(),
+            );
+        }
+        Ok(())
+    }
+}
