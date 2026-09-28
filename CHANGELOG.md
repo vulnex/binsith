@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix Windows batch-export completion publication while retaining directory
+  protection and rejecting existing or changed completion manifests.
+
 - Add sanitizer fuzz targets for native-glob selection and full completed-batch
   import/export, plus synthetic RSS/scratch/throughput benchmark tooling.
   Long campaigns and native release qualification remain separate gates.

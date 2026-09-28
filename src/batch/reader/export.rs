@@ -531,7 +531,7 @@ fn run_inner(
         token,
         |out| write_json(out, &manifest),
     )?;
-    stamps.push((".manifest.pending", stamp));
+    stamps.push((".manifest.pending", stamp.clone()));
     diagnostic("Checking source and publishing completion...")?;
     batch.verify_unchanged()?;
     for (name, stamp) in stamps {
@@ -540,7 +540,7 @@ fn run_inner(
     if token.is_cancelled() {
         return Err(Error::Interrupted);
     }
-    output.publish_manifest()?;
+    output.publish_manifest(&stamp)?;
     Ok(exit_code)
 }
 

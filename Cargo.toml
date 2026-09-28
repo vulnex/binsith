@@ -31,4 +31,4 @@ signal-hook = { version = "0.4", default-features = false }
 ctrlc = "3.5"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Wdk_Storage_FileSystem"] }
