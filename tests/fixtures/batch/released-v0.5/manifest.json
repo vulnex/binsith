@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "batch_id": "released-v0.5-synthetic",
+  "build": {
+    "version": "0.5.0",
+    "revision": "8fe6a7ad393e9c924a8322f696f8f8d7a665e812",
+    "source_sha256": "efd40545cde5e0c2f773c20f35b79da724b36e4e23301028d11f3d87444b1903",
+    "target": "aarch64-apple-darwin",
+    "profile": "release"
+  },
+  "configuration": {
+    "jobs": 1,
+    "work_queue_capacity": 2,
+    "recursive": false,
+    "fail_fast": false,
+    "analysis": {
+      "strings": true,
+      "matches_only": false,
+      "no_decode": false,
+      "max_string_bytes": 1048576,
+      "max_decode_bytes": 262144,
+      "encoding": "auto",
+      "scan_utf16": false,
+      "offset": 0,
+      "length": null,
+      "min_length": 4,
+      "categories": [],
+      "decode_depth": 1,
+      "entropy": false,
+      "entropy_window": 4096,
+      "entropy_threshold": 7.0
+    },
+    "patterns_sha256": "89bb2d31a928db22b3a83739954a03741a633caec42762dc01daf20f1c9bf35e"
+  },
+  "input_root_display": "synthetic-input",
+  "output_root_display": "synthetic-output",
+  "enumeration_policy": "observed_entries_v1",
+  "started_unix_ms": 1000,
+  "discovery_started_unix_ms": 1000,
+  "discovery_finished_unix_ms": 1000,
+  "finished_unix_ms": 1000,
+  "elapsed_ms": 0,
+  "discovery_complete": true,
+  "status": "complete",
+  "stop_reasons": [],
+  "counters": {
+    "observed_entries": 1,
+    "eligible": 1,
+    "policy_skipped": 0,
+    "discovery_errors": 0,
+    "queued": 0,
+    "active": 0,
+    "complete": 1,
+    "limited": 0,
+    "failed": 0,
+    "cancelled": 0,
+    "files_with_indicators": 1,
+    "limited_files_with_indicators": 0
+  },
+  "artifacts": {
+    "files": "files.jsonl",
+    "errors": "errors.jsonl",
+    "reports": "results"
+  }
+}

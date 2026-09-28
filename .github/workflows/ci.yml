@@ -88,3 +88,7 @@ jobs:
       - run: mkdir -p fuzz/corpus/strings && cp fuzz/seeds/strings/* fuzz/corpus/strings/
       - name: Bounded sanitizer fuzz smoke
         run: cargo +nightly fuzz run strings fuzz/corpus/strings -- -max_total_time=15 -runs=10000 -max_len=8192 -timeout=5 -rss_limit_mb=1024 -seed=45335
+      - name: Seed batch artifact parser fuzzing
+        run: mkdir -p fuzz/corpus/batch_json && cp fuzz/seeds/batch_json/* fuzz/corpus/batch_json/
+      - name: Bounded batch JSON sanitizer fuzz smoke
+        run: cargo +nightly fuzz run batch-json fuzz/corpus/batch_json -- -max_total_time=15 -runs=10000 -max_len=65536 -timeout=5 -rss_limit_mb=1024 -seed=45336

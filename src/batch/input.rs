@@ -29,6 +29,9 @@ pub(super) struct Snapshot {
     changed: Option<(i64, i64)>,
 }
 impl Snapshot {
+    pub(super) fn identity_key(&self) -> Vec<u8> {
+        [self.identity.0.to_be_bytes(), self.identity.1.to_be_bytes()].concat()
+    }
     pub(super) fn same_contents(&self, other: &Self) -> bool {
         self.size == other.size && self.modified == other.modified
     }
