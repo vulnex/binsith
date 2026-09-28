@@ -1,5 +1,7 @@
 """Qualification harness contracts: stable fixtures and independent receipt checks."""
 import json
+import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +10,19 @@ import benchmark_batch_export as benchmark
 
 
 class ExportBenchmarkTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "native Windows process counters")
+    def test_windows_peak_survives_allocation_release_and_process_exit(self):
+        sample = benchmark.measure([sys.executable, "-c",
+            "x=bytearray(64*1024*1024); x[::4096]=b'x'*(len(x)//4096); del x"], 30)
+        self.assertGreaterEqual(sample["peak_rss_bytes"], 64 * 1024 * 1024)
+        self.assertEqual(sample["rss_source"], "windows_peak_working_set")
+
+    @unittest.skipUnless(os.name == "nt", "native Windows process counters")
+    def test_windows_invalid_handle_cannot_report_a_memory_pass(self):
+        from types import SimpleNamespace
+        with self.assertRaises(OSError):
+            benchmark.windows_peak_rss(SimpleNamespace(_handle=0))
+
     def test_fixture_identity_is_stable_and_journal_reports_are_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1028,7 +1028,10 @@ python3 tools/benchmark_batch_export.py --entries 5000 --shape cardinality --run
 ```
 
 Results include local platform/build identity; keep them local. Use a fresh result
-filename for each run. The tool reports the 256 MiB qualification RSS target, marks
+filename for each run. On Windows, CPython’s retained child-process handle supplies
+the lifetime peak working set, including allocations freed before process exit.
+Counter errors abort the run; each sample records its measurement source. On Unix,
+the tool uses `wait4` peak RSS. The tool reports the 256 MiB qualification RSS target, marks
 missing RSS measurements inconclusive, and records throughput as a baseline rather
 than claiming a frozen acceptance threshold. Larger cases, native runtime checks,
 extended fuzzing and final package identity remain release qualification gates.

@@ -87,6 +87,39 @@ def generate(destination, entries, shape, details):
             "generator": "released-v0.5-clone-v1"}
 
 
+def windows_peak_rss(child):
+    """Read the kernel lifetime peak from CPython's retained process handle.
+
+    Query after wait(), before Popen is destroyed: this also captures short-lived
+    allocations that polling can miss. Never reopen by PID (which can be reused).
+    PeakWorkingSetSize is resident bytes, not private committed bytes.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class MemoryCounters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in (
+                "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).K32GetProcessMemoryInfo
+    query.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
+    query.restype = wintypes.BOOL
+    counters = MemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    # CPython Popen owns this handle until destruction; wait() does not close it.
+    handle = getattr(child, "_handle", None)
+    if handle is None:
+        raise RuntimeError("Windows memory measurement requires a retained process handle")
+    if not query(int(handle), ctypes.byref(counters), counters.cb):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not counters.PeakWorkingSetSize:
+        raise RuntimeError("Windows returned an unavailable peak working set")
+    return counters.PeakWorkingSetSize
+
+
 def measure(command, timeout):
     with tempfile.TemporaryFile() as errors:
         started = time.perf_counter()
@@ -105,6 +138,8 @@ def measure(command, timeout):
                     time.sleep(0.005)
             else:
                 child.wait(timeout=timeout)
+                if os.name == "nt":
+                    peak = windows_peak_rss(child)
         finally:
             if child.returncode is None:
                 child.kill()
@@ -113,7 +148,8 @@ def measure(command, timeout):
         errors.seek(0)
         if child.returncode not in (0, 1):
             raise RuntimeError(f"export exited {child.returncode}: " + errors.read().decode(errors="replace"))
-        return {"elapsed_seconds": elapsed, "peak_rss_bytes": peak, "exit_code": child.returncode}
+        return {"elapsed_seconds": elapsed, "peak_rss_bytes": peak, "exit_code": child.returncode,
+                "rss_source": "windows_peak_working_set" if os.name == "nt" else "wait4_ru_maxrss" if hasattr(os, "wait4") else "unavailable"}
 
 
 def verify(destination, sample, entries, expected_observations=None):
