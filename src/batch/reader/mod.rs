@@ -12,9 +12,11 @@
 //! Imports support manifest v1/v2 and report/journal v1 within these bounds.
 //! Samples are not rescanned; metadata consistency does not authenticate findings.
 //! Mutable filesystems are not snapshots, and blocked I/O may delay cancellation.
-//! No command-line import/export operation is exposed yet.
+//! Offline export consumes this inventory without reopening sample files.
+pub mod export;
 mod fs;
 mod json;
+mod observations;
 mod report;
 mod sort;
 
@@ -71,7 +73,7 @@ impl Error {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Limits {
     pub manifest_bytes: usize,
     pub line_bytes: usize,
@@ -205,6 +207,9 @@ pub struct ValidatedBatch {
     token: crate::scanner::CancellationToken,
     imported_bytes: u64,
     scratch_high_water: u64,
+    scratch: sort::Scratch,
+    limits: Limits,
+    manifest_sha256: String,
     unreferenced_artifact_entries: u64,
 }
 impl ValidatedBatch {
@@ -252,7 +257,7 @@ impl ValidatedBatch {
     }
 }
 
-/// Limits are explicit for embedding/tests; no CLI exists until export is ready.
+/// Limits are explicit for embedding/tests.
 pub fn read(
     root: &Path,
     limits: Limits,
@@ -294,6 +299,8 @@ fn read_inner(path: &Path, limits: Limits, budget: &mut Budget) -> Result<Valida
     if bytes.len() > limits.manifest_bytes {
         return Err(invalid("manifest byte limit exceeded"));
     }
+    use sha2::{Digest, Sha256};
+    let manifest_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let manifest: Manifest = json::document(&bytes)?;
     manifest.validate().map_err(invalid)?;
     if manifest.status != BatchStatus::Complete {
@@ -612,6 +619,9 @@ fn read_inner(path: &Path, limits: Limits, budget: &mut Budget) -> Result<Valida
         imported_bytes: budget.read,
         scratch_high_water: scratch.high_water(),
         unreferenced_artifact_entries: unknown,
+        scratch,
+        limits,
+        manifest_sha256,
     };
     validated.verify_unchanged()?;
     Ok(validated)

@@ -31,8 +31,17 @@ struct Args {
     #[command(flatten)]
     #[serde(skip)]
     folder: binsith::batch::cli::FolderOptions,
+    /// Import one completed batch into a new offline indicator bundle
+    #[arg(long, requires = "output_dir", conflicts_with_all = ["file", "list_categories"])]
+    batch_input: Option<std::path::PathBuf>,
+    /// Include raw indicator CSV alongside authoritative JSON (values are untrusted)
+    #[arg(long, requires = "batch_input")]
+    batch_csv: bool,
+    /// Filter combined indicators by their recorded validation status
+    #[arg(long, value_enum, default_value = "all", requires = "batch_input")]
+    batch_validation: binsith::batch::export::ValidationFilter,
     /// Input file or directory, or - for standard input
-    #[arg(required_unless_present = "list_categories")]
+    #[arg(required_unless_present_any = ["list_categories", "batch_input"])]
     file: Option<std::path::PathBuf>,
     /// List available bundled/custom pattern categories without reading a sample
     #[arg(long, conflicts_with_all = ["file", "summary", "strings", "matches_only", "hex", "no_decode", "output", "max_string_bytes", "max_decode_bytes", "encoding", "scan_utf16", "offset", "length", "min_length", "categories", "decode_depth", "entropy", "entropy_window", "entropy_threshold", "jsonl", "live_jsonl", "export_indicators", "export_format", "export_validation", "quiet", "match_exit_code", "no_match_exit_code", "inconclusive_exit_code", "compare"])]
@@ -754,10 +763,86 @@ fn folder_run(batch: binsith::batch::preflight::FrozenBatch) -> u8 {
     }
 }
 
+fn batch_export_run(args: &Args, matches: &clap::ArgMatches) -> u8 {
+    use binsith::{
+        batch::{export, signals::InterruptHandler},
+        scanner::CancellationToken,
+    };
+    use clap::parser::ValueSource;
+    // Only explicit command-line values conflict; scanner defaults are harmless.
+    for argument in Args::command().get_arguments() {
+        let id = argument.get_id().as_str();
+        if matches.value_source(id) == Some(ValueSource::CommandLine)
+            && !matches!(
+                id,
+                "batch_input"
+                    | "batch_csv"
+                    | "batch_validation"
+                    | "output_dir"
+                    | "quiet"
+                    | "progress"
+            )
+        {
+            eprintln!("binsith: option {id} cannot accompany --batch-input");
+            return 2;
+        }
+    }
+    let token = CancellationToken::default();
+    let _handler = match InterruptHandler::install_export(token.clone()) {
+        Ok(handler) => handler,
+        Err(error) => {
+            eprintln!("binsith: cannot install interrupt handler: {error}");
+            return 2;
+        }
+    };
+    let options = export::Options {
+        csv: args.batch_csv,
+        validation: args.batch_validation,
+        ..Default::default()
+    };
+    let result = export::run(
+        args.batch_input.as_deref().unwrap(),
+        args.folder.output_dir.as_deref().unwrap(),
+        options,
+        token,
+        |message| {
+            if args.folder.progress || !args.quiet {
+                writeln!(io::stderr().lock(), "binsith: {message}")
+            } else {
+                Ok(())
+            }
+        },
+    );
+    match result {
+        Ok(code) => {
+            // The completion manifest is already committed. Diagnostics and late
+            // interrupts cannot change its recorded exit status.
+            if !args.quiet {
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "binsith: export bundle completed (status {code})"
+                );
+            }
+            code
+        }
+        Err(error) => {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "binsith: {}",
+                utils::escape_string(&error.to_string())
+            );
+            error.exit_code()
+        }
+    }
+}
+
 fn main() -> std::process::ExitCode {
     use std::io::IsTerminal;
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    if args.batch_input.is_some() {
+        return std::process::ExitCode::from(batch_export_run(&args, &matches));
+    }
     match binsith::batch::preflight::inspect(
         &args.folder,
         &matches,

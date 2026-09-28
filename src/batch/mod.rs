@@ -25,6 +25,7 @@ mod path;
 pub mod preflight;
 pub mod progress;
 pub mod reader;
+pub use reader::export;
 mod records;
 pub mod roots;
 pub mod selection;

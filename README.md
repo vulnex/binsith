@@ -778,7 +778,135 @@ Using any of these flags writes a version-2 manifest with the effective `selecti
 policy (`native_glob_v1`) and `required_capabilities: ["selection_v1"]`. Consumers
 must understand that scope or reject the version. Scans without these flags retain
 version-1 manifests and existing selection behavior. Journal/report schemas are
-unchanged. These controls do not add offline aggregation or retry.
+unchanged. Retry remains separate from selection.
+
+### Export a completed batch (unreleased v0.6 development)
+
+Current source builds can combine one completed batch without reopening its sample
+files. Published 0.5.0 packages do not contain this command:
+
+```sh
+binsith --batch-input selected-reports --output-dir investigation
+binsith --batch-input selected-reports --output-dir investigation-validated --batch-validation validated --batch-csv
+```
+
+Use a **nonexistent destination with an existing parent**, outside the source batch.
+Existing destinations, source/destination overlap, symlink/reparse traversal,
+incomplete batches, active output claims and malformed artifacts are rejected.
+A completed batch containing file failures or analysis limits is importable; its
+export retains those limitations and exits 1. Orphan reports are counted but never
+adopted. The reader supports manifest versions 1 and 2 and report/journal version 1
+within the limits below. It checks consistency, not producer authenticity.
+
+`--batch-input` conflicts with a positional input and every explicitly supplied
+scan option, even one set to its default. `--batch-csv` and
+`--batch-validation all|actionable|validated` require batch input. The default
+filter is `all`; filtering alone does not make an export incomplete. `--quiet`
+suppresses human messages, and `--progress` requests phase messages on stderr even
+with quiet enabled. This operation leaves stdout empty.
+
+A completed bundle contains:
+
+| File | Contract |
+| --- | --- |
+| `indicators.json` | Schema 1, kind `batch_indicator_export`; exact keys, counts and bounded provenance samples. |
+| `summary.json` | Schema 1, kind `batch_summary`; scope, coverage, reconciled counters, observed rankings and bounded source navigation. |
+| `indicators.csv` | Optional raw CSV; one row per retained key, with JSON locations and reason counts in quoted columns. |
+| `manifest.json` | Schema 1, kind `batch_export_bundle`; completion, recorded exit code, limits, build identity, input-manifest SHA-256 and payload lengths/SHA-256 values. |
+
+Each JSON payload repeats the source batch ID, processing state, filter and
+coverage. Input display roots are omitted. Native relative paths and indicator
+values can still be sensitive. CSV preserves raw values, including spreadsheet
+formula prefixes; quoting does not make a spreadsheet safe. Use the companion
+JSON for coverage, especially when the CSV has zero data rows. Summary rankings and report references are described below.
+
+Keys are exact `(category, value, validation_status)` tuples; conflicting
+validations stay separate. Files are visited in native-path byte order, with
+primary details before decoded layers within each finding. Output keys are sorted
+by UTF-8 category/value/status. JSON object order and journal arrival order do not
+change the retained subset; report array order does. Locations include the native
+path, report ID/location, source span/encoding, extraction method and nullable
+decoded span/encoding. Surrounding evidence context is omitted.
+
+`observed_occurrences` counts report detail observations, including extraction-pass
+repeats. Each retained key also records exact `distinct_file_entries` and
+`location_observations_omitted`; its occurrences equal retained locations plus
+omitted location observations. The global observation count equals the sum of
+retained-key occurrences, `filtered_observations` and
+`unretained_key_observations`. `total_unique_keys` is null when admission saturated.
+Summary-only scans have null indicator metrics and `not_analyzed` coverage; an
+empty scope has zero metrics. Upstream omission counts retain their category and
+detail-observation units, while source counters retain file-entry units.
+
+The summary ranks up to 20 **retained** keys by descending `distinct_file_entries`,
+then category/value/status in UTF-8 byte order. It records `retained_shared_keys`
+(keys observed in more than one entry), `keys_not_shown` and
+`key_admission_saturated`. Rankings are over the retained, filtered observations;
+they do not claim global top values, maliciousness or exhaustive file relationships.
+`ranking.indicator_artifact` names `indicators.json`; each row's zero-based
+`indicator_index` references that file's canonical `indicators` array.
+
+Each ranked key offers up to eight `source_samples`: the first retained observation
+for each sampled path entry. Resolve `report_location` relative to the **source
+batch root**, then use its source/decoded spans to inspect the report. `report_id`
+and the lossless native `path` identify it independently of display names. No
+original sample file is needed. `source_entries_not_shown` is the exact distinct
+entry count minus the sampled entries; repeated observations from one file do not
+use multiple source slots. A provenance cap can leave no source sample while
+preserving a known distinct-entry count. These presentation caps do not change
+aggregation coverage or the exit status; their effective values are recorded in
+`presentation_limits`.
+
+`counts.selected_bytes.reported_total` sums selected-range bytes from complete and
+limited reports, counting each batch path entry once. It does not sum full logical
+file sizes, unique underlying files or successfully analyzed bytes from failed
+scans. `reported_entries` and `unreported_eligible_entries` explain that scope;
+`eligible_total` is null if any eligible entry has no report. Skipped entries and
+unvisited descendants contribute no inferred byte sizes. Selected bytes remain
+available for summary-only scans even though their indicator metrics are null.
+
+`outcome_reasons` groups skipped/failed inventory entries by outcome and
+recorded reason. Its `observed_entries` unit includes a pruned directory as one
+entry. Descendants remain `unknown_not_counted`. Up to 128 reason keys / 64 KiB
+reason text are retained in canonical inventory order; subsequent new reasons
+are counted in `unretained_reason_entries`, while existing reasons continue to
+accumulate. This is a bounded summary view; the source journals retain individual
+outcomes. Source counters remain exact regardless of this presentation cap.
+`coverage.string_analysis` states whether analysis was enabled independently of
+scan failures, so unavailable indicator metrics cannot be mistaken for zero hits.
+
+Default retention limits are 10,000 keys / 16 MiB category+value bytes, 64 locations
+per key / 16 MiB encoded locations total, and 16 validation reasons per key / 1 MiB
+reason text total. New-key admission freezes after its first capacity failure;
+existing keys continue to be counted. Location byte exhaustion freezes location
+admission globally, while per-key caps apply independently. Omitted observations
+and reasons remain explicit. Retention limits produce a valid limited bundle
+(exit 1); they do not silently claim complete coverage.
+
+Import limits are 1 MiB manifest, 256 KiB journal lines, 100,000 entries, 400,000
+records per journal and 8 GiB cumulative bytes across validation and extraction
+passes. JSON limits are 64 nesting levels, 256 members per object, 256-byte names,
+16 MiB serialized scalar tokens and 4 MiB decoded strings. The reader rejects
+duplicate keys, including ignored extensions. Compound metadata/detail captures
+and extraction spool records are bounded at 16 MiB each; upstream omission tables
+at 256 categories / 1 MiB category text. Inventory sort runs use 2 MiB buffers;
+all live scratch, including merge overlap and extraction spools, shares a 1 GiB
+budget. Bundle output, including the completion manifest, is capped at 256 MiB.
+These are logical limits, not an OS-level RSS or execution-time sandbox, and may
+reject otherwise valid reports. Native Windows/Linux runtime and broad resource
+qualification of this new operation remain pending.
+
+Payloads are written first; source and output metadata are checked before the
+completion manifest is atomically published without replacement. **A bundle is
+complete only when `manifest.json` is present and its payload receipts agree.**
+Before that point, failure may leave an unfinished destination which must not be
+reused. Exit codes are 0 for complete configured scope, 1 for operational failures
+or source/aggregation limits, 2 for invalid input/setup, and 130 for an observed
+interrupt before publication. Export interrupts always cancel cooperatively,
+including repeated interrupts; blocked kernel I/O can delay cancellation. After
+publication, late interrupts or diagnostic failures do not change the recorded
+exit status. Filesystem metadata checks are not a snapshot, hashes do not
+authenticate the producer, and publication does not promise power-loss durability.
 
 ### Options and traversal
 
