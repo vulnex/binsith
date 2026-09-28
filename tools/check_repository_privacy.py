@@ -9,7 +9,7 @@ root = Path(__file__).resolve().parents[1]
 tracked = subprocess.check_output(
     ["git", "ls-files", "-z"], cwd=root
 ).decode("utf-8", errors="surrogateescape").split("\0")
-private_roots = {"devnotes", "evaluations"}
+private_roots = {"devnotes", "evaluations", "private-packages"}
 violations = [
     f"private directory is tracked: {name}"
     for name in tracked if name and name.split("/", 1)[0].lower() in private_roots
@@ -23,7 +23,7 @@ for directory in sorted(private_roots):
         violations.append(f"private directory exists in reachable history: {directory}/")
 for filename in ("README.md", "RELEASE.md", "CHANGELOG.md"):
     text = (root / filename).read_text(encoding="utf-8")
-    if re.search(r"\]\([^\n)]*(?:devnotes|evaluations)/", text, re.IGNORECASE):
+    if re.search(r"\]\([^\n)]*(?:devnotes|evaluations|private-packages)/", text, re.IGNORECASE):
         violations.append(f"{filename} links to private local material")
 if violations:
     print("FAIL repository privacy policy", file=sys.stderr)

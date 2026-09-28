@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import platform
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -84,17 +85,28 @@ def acl_denial(binary, base, directory):
 def long_paths(binary, base):
     root = base / 'long-input'
     root.mkdir()
+    # Use extended paths only for fixture creation/cleanup. The scanner receives
+    # the ordinary short root and must discover/open the long descendant itself.
+    absolute = str(root.resolve())
+    extended = Path('\\\\?\\UNC\\' + absolute[2:] if absolute.startswith('\\\\')
+                    else '\\\\?\\' + absolute)
     parent = root
     while len(str(parent)) < 320:
         parent /= 'long-component'
     try:
-        parent.mkdir(parents=True)
-        (parent / 'sample').write_bytes(b'long')
-    except OSError as error:
-        return {'status': 'skipped', 'reason': 'volume/process long-path fixture unavailable: ' + str(error)}
-    relative = str((parent / 'sample').relative_to(root))
-    counters = scan(binary, root, base / 'long-output', {identity(relative): b'long'})
-    return {'status': 'passed', 'path_characters': len(str(parent / 'sample')), 'counters': counters}
+        try:
+            fixture_parent = extended / parent.relative_to(root)
+            fixture_parent.mkdir(parents=True)
+            (fixture_parent / 'sample').write_bytes(b'long')
+        except OSError as error:
+            return {'status': 'skipped', 'reason': 'volume/process long-path fixture unavailable: ' + str(error)}
+        relative = str((parent / 'sample').relative_to(root))
+        counters = scan(binary, root, base / 'long-output', {identity(relative): b'long'})
+        return {'status': 'passed', 'path_characters': len(str(parent / 'sample')),
+                'fixture_path_mode': 'extended', 'scanner_root_mode': 'ordinary', 'counters': counters}
+    finally:
+        # The ordinary Python path may itself hit MAX_PATH during recursive cleanup.
+        shutil.rmtree(extended)
 
 
 class FileStandardInfo(ctypes.Structure):

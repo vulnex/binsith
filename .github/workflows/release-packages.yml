@@ -67,6 +67,5 @@ jobs:
             release-source/dist/*.tar.gz
             release-source/dist/*.zip
             release-source/dist/SHA256SUMS-${{ matrix.target }}
-            release-source/dist/folder-examples-${{ matrix.target }}.json
           if-no-files-found: error
           retention-days: 14

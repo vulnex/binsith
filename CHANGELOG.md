@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Exercise Windows long-path descendants using extended paths for fixture setup
+  and cleanup, without changing system settings or the scanner root path.
+- Exclude private tester packages from Git and source archives, and stop CI
+  artifact uploads of raw qualification reports that may contain local paths.
+
 - Keep batch-export-only options out of legacy single-file report metadata,
   preserving the v0.5 configuration shape.
 

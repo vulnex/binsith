@@ -92,7 +92,8 @@ Windows packages use ZIP; macOS and Linux packages use tar.gz. Each package is
 read back and its extracted binary is smoke-tested before checksums are written.
 macOS/Linux packages also execute the folder examples from the archived README
 against the extracted binary. Their build and content hashes and check results
-are saved as `dist/folder-examples-<target>.json` and retained with CI artifacts.
+are saved as `dist/folder-examples-<target>.json` locally. Raw qualification
+reports can contain machine paths and are not uploaded as CI artifacts.
 
 The `Release packages` workflow builds Linux and Windows artifacts from the
 immutable workflow commit (`github.sha`), using the packaging script from that
@@ -106,7 +107,7 @@ revision, and source fingerprint match it. It includes only the trusted binary,
 README.md, CHANGELOG.md, RELEASE.md, LICENSE, the selected README logo, and generated
 BUILD-INFO.json. Alternative branding concepts are excluded. It validates
 archive membership and binary digest before producing SHA256SUMS in `dist/`.
-No recursive workspace archive is used. Local `devnotes/` and `evaluations/` content
+No recursive workspace archive is used. Local `devnotes/`, `evaluations/`, and `private-packages/` content
 must never be committed, uploaded, or added to release/source packages or issues.
 
 The archive is unsigned. SHA256SUMS detects corruption but is not proof of
