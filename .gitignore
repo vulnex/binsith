@@ -11,3 +11,4 @@
 
 # Private development notes and qualification evidence; never commit.
 /devnotes/
+/private-packages/

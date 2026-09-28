@@ -54,16 +54,7 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_folder*.py'
       - name: JSON and CSV standard-consumer compatibility
         run: python tools/check_export_compatibility.py
-      - name: Preserve filesystem capability evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: filesystem-evidence-${{ matrix.os }}
-          path: |
-            target/folder-examples.json
-            target/fs19-filesystems.json
-            target/fs19-windows-*.json
-          if-no-files-found: warn
+      # Raw qualification reports can contain local paths. Keep them on the runner.
       - name: Bounded CLI stress and benchmark smoke
         if: runner.os == 'Linux'
         run: python3 tools/quality_checks.py --cases 64 --mib 1 --runs 2 --output target/quality-smoke.json

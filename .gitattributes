@@ -2,6 +2,7 @@
 # Exclude private local material from source archives.
 /devnotes export-ignore
 /evaluations export-ignore
+/private-packages export-ignore
 
 # Preserve the exact RFC-style CRLF bytes of the synthetic CSV golden.
 tests/fixtures/batch/export-v1/indicators.csv -text whitespace=cr-at-eol
