@@ -218,12 +218,17 @@ pub fn run(
         target: env!("BINSITH_TARGET").into(),
         profile: env!("BINSITH_PROFILE").into(),
     };
-    let mut coordinator = Coordinator::start(
+    let mut coordinator = Coordinator::start_with_selection(
         output.clone(),
         batch_id.clone(),
         build,
         batch.configuration().clone(),
         batch.roots().input(),
+        batch
+            .folder()
+            .selection
+            .as_ref()
+            .map(|s| s.configuration().clone()),
     )
     .map_err(|e| setup(e.to_string()))?;
     std::thread::scope(|scope| {
@@ -331,7 +336,8 @@ pub fn run(
                 batch.roots(),
                 batch.configuration().recursive,
                 cancellation.clone(),
-            )?;
+            )?
+            .with_selection(batch.folder().selection.clone());
             coordinator.begin_discovery()?;
             let mut queue = VecDeque::new();
             let mut active = vec![None; jobs];
@@ -366,7 +372,42 @@ pub fn run(
                     }
                 }
                 if !stopping && !ended && queue.len() < batch.configuration().work_queue_capacity {
-                    let event = discovery.next();
+                    let event = discovery.next().map(|event| {
+                        // Do not start an additional open after cancellation during discovery.
+                        if cancellation.is_cancelled() {
+                            return event;
+                        }
+                        if let DiscoveryEvent::File(candidate) = event {
+                            if let Some(limit) = batch
+                                .folder()
+                                .selection
+                                .as_ref()
+                                .and_then(|s| s.configuration().max_file_bytes)
+                            {
+                                match candidate.exceeds_size_before_admission(limit) {
+                                    Ok(true) => {
+                                        return DiscoveryEvent::Skipped {
+                                            relative: candidate.relative_path().into(),
+                                            reason: discovery::SkipReason::Selection(
+                                                selection::SelectionReason::Size,
+                                            ),
+                                        }
+                                    }
+                                    Err(error) => {
+                                        return DiscoveryEvent::Error {
+                                            relative: candidate.relative_path().into(),
+                                            error,
+                                            fatal: false,
+                                        }
+                                    }
+                                    Ok(false) => (),
+                                }
+                            }
+                            DiscoveryEvent::File(candidate)
+                        } else {
+                            event
+                        }
+                    });
                     // Filesystem lookups may block; do not admit their result after an interrupt.
                     if cancellation.is_cancelled() {
                         continue;
@@ -389,6 +430,7 @@ pub fn run(
                                 discovery::SkipReason::Link => "link",
                                 discovery::SkipReason::SpecialFile => "special_file",
                                 discovery::SkipReason::OutputTree => "output_tree",
+                                discovery::SkipReason::Selection(reason) => reason.code(),
                             };
                             coordinator.skip(
                                 RelativePath::from_relative(&relative)?,

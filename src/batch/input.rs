@@ -171,6 +171,22 @@ impl Candidate {
     pub fn record_path(&self) -> Result<RelativePath, &'static str> {
         RelativePath::from_relative(&self.relative)
     }
+    /// Pre-admission size check on a no-follow regular-file handle. The queued
+    /// candidate still owns no handle; open() detects subsequent mutation.
+    pub fn exceeds_size_before_admission(&self, limit: u64) -> io::Result<bool> {
+        let file = open_checked(&self.absolute, false)?;
+        let current = Snapshot::opened(&file)?;
+        if !current.same_identity(&self.observed) {
+            return Err(changed());
+        }
+        if current.size > limit {
+            return Ok(true);
+        }
+        if current != self.observed {
+            return Err(changed());
+        }
+        Ok(false)
+    }
     pub fn open(&self) -> io::Result<OpenedInput> {
         let file = open_checked(&self.absolute, false)?;
         let before = Snapshot::opened(&file)?;

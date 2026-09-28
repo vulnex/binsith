@@ -328,6 +328,7 @@ pub(super) fn storage_fixture(input: &Path, output: &Path) -> FrozenBatch {
         roots: super::roots::resolve_roots(input, output).unwrap(),
         validated: ValidatedConfiguration {
             folder: FolderConfiguration {
+                selection: None,
                 recursive: false,
                 jobs: 1,
                 work_queue_capacity: 2,

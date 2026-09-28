@@ -11,7 +11,8 @@
 // https://www.vulnex.com
 //
 
-use super::{Counters, SchemaVersion};
+use super::selection::{Selection, SelectionConfiguration};
+use super::Counters;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,33 @@ pub struct BuildIdentity {
     pub source_sha256: String,
     pub target: String,
     pub profile: String,
+}
+
+/// Manifest versions evolve independently of journal/report versions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub enum ManifestVersion {
+    #[default]
+    V1,
+    V2,
+}
+impl TryFrom<u8> for ManifestVersion {
+    type Error = &'static str;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::V1),
+            2 => Ok(Self::V2),
+            _ => Err("unsupported manifest schema version"),
+        }
+    }
+}
+impl From<ManifestVersion> for u8 {
+    fn from(value: ManifestVersion) -> Self {
+        match value {
+            ManifestVersion::V1 => 1,
+            ManifestVersion::V2 => 2,
+        }
+    }
 }
 
 /// Normalized values: summary is always enabled by folder JSON reporting.
@@ -115,7 +143,11 @@ impl Default for ArtifactLocations {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
-    pub schema_version: SchemaVersion,
+    pub schema_version: ManifestVersion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<SelectionConfiguration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_capabilities: Vec<String>,
     pub batch_id: String,
     pub build: BuildIdentity,
     pub configuration: BatchConfiguration,
@@ -144,6 +176,16 @@ impl Manifest {
     /// Semantic checks do not establish that reports exist or journals were flushed;
     /// the publishing coordinator must establish those facts before completion.
     pub fn validate(&self) -> Result<(), &'static str> {
+        match (&self.schema_version, &self.selection) {
+            (ManifestVersion::V1, None) if self.required_capabilities.is_empty() => (),
+            (ManifestVersion::V2, Some(selection))
+                if self.required_capabilities == ["selection_v1"] =>
+            {
+                Selection::compile(selection.clone(), self.configuration.recursive)
+                    .map_err(|_| "invalid manifest selection policy")?;
+            }
+            _ => return Err("manifest version, selection and capabilities disagree"),
+        }
         self.counters.validate()?;
         self.configuration.analysis.validate()?;
         if self.batch_id.is_empty()

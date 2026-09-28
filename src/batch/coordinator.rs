@@ -176,13 +176,33 @@ impl Coordinator<DiskStore> {
         configuration: BatchConfiguration,
         input_root: &Path,
     ) -> Result<Self> {
+        Self::start_with_selection(output, batch_id, build, configuration, input_root, None)
+    }
+    pub fn start_with_selection(
+        output: OutputClaim,
+        batch_id: String,
+        build: BuildIdentity,
+        configuration: BatchConfiguration,
+        input_root: &Path,
+        selection: Option<super::selection::SelectionConfiguration>,
+    ) -> Result<Self> {
         let counters = Counters {
             files_with_indicators: configuration.analysis.strings.then_some(0),
             limited_files_with_indicators: configuration.analysis.strings.then_some(0),
             ..Default::default()
         };
         let manifest = Manifest {
-            schema_version: SchemaVersion,
+            schema_version: if selection.is_some() {
+                ManifestVersion::V2
+            } else {
+                ManifestVersion::V1
+            },
+            required_capabilities: if selection.is_some() {
+                vec!["selection_v1".into()]
+            } else {
+                vec![]
+            },
+            selection,
             batch_id,
             build,
             configuration,

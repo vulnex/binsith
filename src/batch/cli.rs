@@ -11,12 +11,44 @@
 // https://www.vulnex.com
 //
 
+use super::selection::{NativeEncoding, Selection, SelectionConfiguration};
 use clap::{parser::ValueSource, ArgMatches};
 use std::path::PathBuf;
+
+pub const FOLDER_OPTION_IDS: &[&str] = &[
+    "recursive",
+    "jobs",
+    "output_dir",
+    "progress",
+    "fail_fast",
+    "include",
+    "exclude",
+    "max_depth",
+    "max_file_bytes",
+];
+
+fn decimal_limit(value: &str) -> Result<u64, String> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("expected an unsigned decimal integer".into());
+    }
+    value.parse().map_err(|_| "limit exceeds u64".into())
+}
 
 /// Folder options shared by preflight and the public CLI.
 #[derive(clap::Args, Debug, Default)]
 pub struct FolderOptions {
+    /// Include files matching a case-sensitive root-relative native glob (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    pub include: Vec<String>,
+    /// Exclude matching files; trailing / excludes a directory subtree (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    pub exclude: Vec<String>,
+    /// Maximum file depth, with root children at zero; requires --recursive
+    #[arg(long, value_parser = decimal_limit)]
+    pub max_depth: Option<u64>,
+    /// Maximum full logical file size in decimal bytes, inclusive
+    #[arg(long, value_parser = decimal_limit)]
+    pub max_file_bytes: Option<u64>,
     /// Include subdirectories
     #[arg(long)]
     pub recursive: bool,
@@ -51,6 +83,7 @@ pub enum ProgressMode {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FolderConfiguration {
+    pub selection: Option<Selection>,
     pub recursive: bool,
     pub jobs: usize,
     pub work_queue_capacity: usize,
@@ -75,9 +108,7 @@ impl FolderOptions {
             matches.try_contains_id(id).unwrap_or(false)
                 && matches.value_source(id) == Some(ValueSource::CommandLine)
         };
-        let folder_requested = ["recursive", "jobs", "output_dir", "progress", "fail_fast"]
-            .iter()
-            .any(|id| explicit(id));
+        let folder_requested = FOLDER_OPTION_IDS.iter().any(|id| explicit(id));
         if input != InputKind::Directory {
             return if folder_requested {
                 Err(
@@ -106,6 +137,25 @@ impl FolderOptions {
                 return Err(format!("option {id} is not supported in folder mode"));
             }
         }
+        let selection = if !self.include.is_empty()
+            || !self.exclude.is_empty()
+            || self.max_depth.is_some()
+            || self.max_file_bytes.is_some()
+        {
+            Some(Selection::compile(
+                SelectionConfiguration {
+                    grammar: "native_glob_v1".into(),
+                    native_encoding: NativeEncoding::current(),
+                    includes: self.include.clone(),
+                    excludes: self.exclude.clone(),
+                    max_depth: self.max_depth,
+                    max_file_bytes: self.max_file_bytes,
+                },
+                self.recursive,
+            )?)
+        } else {
+            None
+        };
         let output_dir = self
             .output_dir
             .clone()
@@ -128,6 +178,7 @@ impl FolderOptions {
             ProgressMode::Disabled
         };
         Ok(Some(FolderConfiguration {
+            selection,
             recursive: self.recursive,
             jobs,
             work_queue_capacity,

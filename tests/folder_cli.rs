@@ -608,3 +608,244 @@ fn summary_escapes_native_output_path_controls() {
     assert!(stderr.contains(&format!("Manifest: {:?}", output.join("manifest.json"))));
     manifest(&output);
 }
+
+fn terminals(output: &Path) -> std::collections::BTreeMap<String, String> {
+    records(output)
+        .into_iter()
+        .filter_map(|entry| {
+            let Event::Terminal { outcome } = entry.event else {
+                return None;
+            };
+            let status = match outcome {
+                Outcome::Complete { .. } => "complete".into(),
+                Outcome::Skipped { reason } => reason,
+                other => panic!("unexpected outcome: {other:?}"),
+            };
+            Some((entry.display_path.replace('\\', "/"), status))
+        })
+        .collect()
+}
+
+#[test]
+fn selection_policies_reconcile_with_reports_and_prune_once() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir_all(input.join("cache/deep")).unwrap();
+    fs::create_dir_all(input.join("nested/deeper")).unwrap();
+    for (name, contents) in [
+        ("a.bin", "1234"),
+        ("big.bin", "12345"),
+        ("no.txt", "1"),
+        (".hidden.bin", "1"),
+        ("nested/b.bin", "12"),
+        ("nested/deny.bin", "12345"),
+        ("nested/deeper/c.bin", "1"),
+        ("cache/deep/unvisited.bin", "1"),
+    ] {
+        fs::write(input.join(name), contents).unwrap();
+    }
+    let flags = [
+        "--recursive",
+        "--fail-fast",
+        "--include",
+        "**/*.bin",
+        "--exclude",
+        "cache/",
+        "--exclude",
+        "**/deny.bin",
+        "--max-depth",
+        "1",
+        "--max-file-bytes",
+        "4",
+    ];
+    let mut reference = None;
+    for jobs in ["1", "4"] {
+        let output = temp.path().join(format!("out-{jobs}"));
+        let mut args = flags.to_vec();
+        args.extend(["--jobs", jobs]);
+        let result = run(&input, &output, &args);
+        assert!(result.status.success(), "{result:?}");
+        let got = terminals(&output);
+        let expected: std::collections::BTreeMap<_, _> = [
+            ("a.bin", "complete"),
+            ("big.bin", "selection_size"),
+            ("no.txt", "selection_not_included"),
+            (".hidden.bin", "complete"),
+            ("nested/b.bin", "complete"),
+            ("nested/deny.bin", "selection_excluded"),
+            ("nested/deeper", "selection_depth"),
+            ("cache", "selection_excluded"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        assert_eq!(got, expected);
+        if let Some(previous) = &reference {
+            assert_eq!(&got, previous);
+        }
+        reference = Some(got);
+        let m = manifest(&output);
+        assert_eq!(m.counters.observed_entries, 8);
+        assert_eq!(m.counters.complete, 3);
+        assert_eq!(m.counters.policy_skipped, 5);
+        assert_eq!(m.schema_version, binsith::batch::ManifestVersion::V2);
+        assert_eq!(m.required_capabilities, ["selection_v1"]);
+        let policy = m.selection.as_ref().unwrap();
+        assert_eq!(policy.includes, ["**/*.bin"]);
+        assert_eq!(policy.max_file_bytes, Some(4));
+        assert_eq!(policy.max_depth, Some(1));
+        let value = serde_json::to_value(&m).unwrap();
+        assert_eq!(serde_json::from_value::<Manifest>(value).unwrap(), m);
+        // Skips stay standalone v1 terminals; no eligible admissions for them.
+        let journal = records(&output);
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|r| matches!(r.event, Event::Admission))
+                .count(),
+            3
+        );
+        for entry in journal {
+            assert_eq!(serde_json::to_value(entry).unwrap()["schema_version"], 1);
+        }
+    }
+}
+
+#[test]
+fn selection_limits_are_full_logical_size_inclusive_and_allow_empty_results() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir_all(input.join("child")).unwrap();
+    fs::write(input.join("empty"), b"").unwrap();
+    fs::write(input.join("four"), b"1234").unwrap();
+    fs::write(input.join("child/unvisited"), b"x").unwrap();
+    let sparse = fs::File::create(input.join("sparse")).unwrap();
+    sparse.set_len(1024 * 1024).unwrap();
+    drop(sparse);
+    let output = temp.path().join("zero");
+    assert!(run(
+        &input,
+        &output,
+        &["--recursive", "--max-depth", "0", "--max-file-bytes", "0"]
+    )
+    .status
+    .success());
+    let got = terminals(&output);
+    assert_eq!(got["empty"], "complete");
+    assert_eq!(got["four"], "selection_size");
+    assert_eq!(got["sparse"], "selection_size");
+    assert_eq!(got["child"], "selection_depth");
+    let output = temp.path().join("range");
+    assert!(
+        run(&input, &output, &["--max-file-bytes", "3", "--length", "0"])
+            .status
+            .success()
+    );
+    assert_eq!(terminals(&output)["four"], "selection_size");
+    let output = temp.path().join("none");
+    assert!(run(&input, &output, &["--include", "missing"])
+        .status
+        .success());
+    assert_eq!(manifest(&output).counters.eligible, 0);
+    assert_eq!(
+        manifest(&output).status,
+        binsith::batch::BatchStatus::Complete
+    );
+}
+
+#[test]
+fn no_selection_retains_v1_and_output_safety_precedes_patterns() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir_all(input.join("child")).unwrap();
+    fs::write(input.join("sample"), b"x").unwrap();
+    let output = temp.path().join("legacy");
+    assert!(run(&input, &output, &[]).status.success());
+    let m = manifest(&output);
+    let wire = serde_json::to_value(m).unwrap();
+    assert_eq!(wire["schema_version"], 1);
+    assert!(wire.get("selection").is_none());
+    assert!(wire.get("required_capabilities").is_none());
+    let output = input.join("reports");
+    assert!(run(
+        &input,
+        &output,
+        &["--recursive", "--include", "**", "--exclude", "reports/"]
+    )
+    .status
+    .success());
+    assert_eq!(terminals(&output)["reports"], "output_tree");
+}
+
+#[test]
+fn invalid_selection_fails_before_output_and_pattern_loading() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    for flags in [
+        vec!["--include", "../escape"],
+        vec!["--include", "cache/"],
+        vec!["--exclude", "a**b"],
+        vec!["--include", ""],
+        vec!["--max-depth", "0"],
+        vec!["--max-file-bytes", "1KiB"],
+        vec!["--max-file-bytes", "+1"],
+        vec!["--max-file-bytes", "18446744073709551616"],
+        vec![
+            "--include",
+            "[abc]",
+            "--patterns",
+            "missing-selection-patterns.toml",
+        ],
+    ] {
+        let output = temp.path().join("never-created");
+        let result = run(&input, &output, &flags);
+        assert_eq!(result.status.code(), Some(2), "{flags:?}: {result:?}");
+        assert!(!output.exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "local macOS volume rejects non-UTF-8 names; execute on Linux"
+)]
+fn selection_matches_non_utf8_names_and_never_admits_links() {
+    use std::{
+        ffi::OsStr,
+        os::unix::{ffi::OsStrExt, fs::symlink},
+    };
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    fs::write(input.join(OsStr::from_bytes(b"bad-\xff.bin")), b"x").unwrap();
+    symlink("bad-\u{fffd}.bin", input.join("link.bin")).unwrap();
+    let output = temp.path().join("output");
+    assert!(run(&input, &output, &["--include", r"bad-\xFF.bin"])
+        .status
+        .success());
+    assert_eq!(manifest(&output).counters.complete, 1);
+    assert_eq!(terminals(&output)["link.bin"], "link");
+    let output = temp.path().join("wildcard");
+    assert!(run(&input, &output, &["--include", "bad-?.bin"])
+        .status
+        .success());
+    assert_eq!(manifest(&output).counters.complete, 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn selection_matches_unpaired_utf16_filename() {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let input = temp.path().join("input");
+    fs::create_dir(&input).unwrap();
+    let name = OsString::from_wide(&[98, 97, 100, 45, 0xd800, 46, 98, 105, 110]);
+    fs::write(input.join(name), b"x").unwrap();
+    let output = temp.path().join("output");
+    assert!(run(&input, &output, &["--include", r"bad-\uD800.bin"])
+        .status
+        .success());
+    assert_eq!(manifest(&output).counters.complete, 1);
+}

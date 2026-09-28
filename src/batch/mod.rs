@@ -26,6 +26,7 @@ pub mod preflight;
 pub mod progress;
 mod records;
 pub mod roots;
+pub mod selection;
 pub mod signals;
 pub use manifest::*;
 pub use path::RelativePath;
