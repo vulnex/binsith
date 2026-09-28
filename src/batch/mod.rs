@@ -24,6 +24,7 @@ pub mod output;
 mod path;
 pub mod preflight;
 pub mod progress;
+pub mod reader;
 mod records;
 pub mod roots;
 pub mod selection;
