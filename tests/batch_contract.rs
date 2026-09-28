@@ -292,6 +292,7 @@ fn manifest_fixtures_roundtrip_and_distinguish_empty_completion_from_interruptio
     for data in [
         include_str!("fixtures/batch/manifest-interrupted.json"),
         include_str!("fixtures/batch/manifest-empty.json"),
+        include_str!("fixtures/batch/manifest-selected.json"),
     ] {
         let value: Value = serde_json::from_str(data).unwrap();
         let manifest: Manifest = serde_json::from_value(value.clone()).unwrap();
@@ -535,4 +536,62 @@ fn diagnostics_reject_wrong_batch_entry_and_nonterminal_links() {
     assert!(error.validate_link("fixture-batch", None).is_err());
     error.entry_id = None;
     error.validate_link("fixture-batch", None).unwrap();
+}
+
+#[test]
+fn selection_manifest_versions_and_capabilities_cannot_be_misrepresented() {
+    use binsith::batch::{
+        selection::{NativeEncoding, SelectionConfiguration},
+        Manifest,
+    };
+    let base: Value =
+        serde_json::from_str(include_str!("fixtures/batch/manifest-empty.json")).unwrap();
+    let mut selected = base.clone();
+    selected["schema_version"] = json!(2);
+    selected["required_capabilities"] = json!(["selection_v1"]);
+    selected["selection"] = serde_json::to_value(SelectionConfiguration {
+        grammar: "native_glob_v1".into(),
+        native_encoding: NativeEncoding::Unix,
+        includes: vec!["**/*.bin".into()],
+        excludes: vec![],
+        max_depth: Some(0),
+        max_file_bytes: None,
+    })
+    .unwrap();
+    let m: Manifest = serde_json::from_value(selected.clone()).unwrap();
+    m.validate().unwrap();
+    assert_eq!(serde_json::to_value(m).unwrap(), selected);
+    for (field, replacement) in [
+        ("schema_version", json!(1)),
+        ("selection", Value::Null),
+        ("required_capabilities", json!([])),
+        ("required_capabilities", json!(["selection_v2"])),
+    ] {
+        let mut value = selected.clone();
+        value[field] = replacement;
+        assert!(serde_json::from_value::<Manifest>(value)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+    let mut invalid = base;
+    invalid["selection"] = selected["selection"].clone();
+    assert!(serde_json::from_value::<Manifest>(invalid)
+        .unwrap()
+        .validate()
+        .is_err());
+    let mut invalid = selected.clone();
+    invalid["selection"]["grammar"] = json!("future");
+    assert!(serde_json::from_value::<Manifest>(invalid)
+        .unwrap()
+        .validate()
+        .is_err());
+    let mut invalid = selected.clone();
+    invalid["selection"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_depth");
+    assert!(serde_json::from_value::<Manifest>(invalid).is_err());
+    selected["schema_version"] = json!(3);
+    assert!(serde_json::from_value::<Manifest>(selected).is_err());
 }

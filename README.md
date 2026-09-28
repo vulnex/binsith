@@ -684,7 +684,9 @@ Report IDs derive from lossless relative-path identities, not input contents.
 Use the terminal record's `outcome.report.location` instead of guessing a filename.
 Hard-linked files at distinct paths are separate entries. Display paths are for
 humans; the structured path field preserves native identities. Treat sharding and
-IDs as opaque when consuming reports. Batch artifacts have schema version 1.
+IDs as opaque when consuming reports. Version 0.5.0 batch artifacts have schema
+version 1. The unreleased selection controls below use manifest version 2 only
+when explicitly enabled; their journals and per-file reports remain version 1.
 
 After the recursive command completes, list its terminal results:
 
@@ -722,6 +724,61 @@ manifest is a checkpoint and can lag the journals. Per-file outcomes are
 Indicator presence does not change folder exit codes. Zero eligible files is a
 valid successful run; policy skips alone do not imply a failed scan. Counts cover
 observed entries, not an atomic snapshot of a changing filesystem.
+
+### Select files (unreleased v0.6 development)
+
+These options require a build from the current source; published 0.5.0 packages
+remain unchanged. For example:
+
+```sh
+binsith samples --recursive --include '**/*.exe' --include '**/*.dll' --exclude '**/cache/' --max-depth 4 --max-file-bytes 104857600 --output-dir selected-reports
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--include PATTERN` | Include matching files; repeat for OR. Omit to include all otherwise eligible files. |
+| `--exclude PATTERN` | Exclude matching files. A trailing `/` excludes and prunes a directory subtree. Exclusions win over includes. |
+| `--max-depth N` | With `--recursive`, visit files at most N levels below the root. Direct child files are depth 0; `0` prunes child directories. |
+| `--max-file-bytes N` | Include regular files whose full logical size is at most N decimal bytes, including sparse files. Zero includes only empty files. |
+
+Patterns match the whole root-relative path, are case-sensitive on every platform,
+and use `/` as their separator. `*.exe` matches only root files;
+`**/*.exe` also matches root files and all nested levels. `*` and `?` stay within a
+component; `**` must be an entire component and matches zero or more components.
+Hidden names participate normally. Includes do not prune directories: a directory
+that does not match may still contain matching files. `cache/` prunes only a root
+child named cache, whereas `**/cache/` prunes it at any level. A file exclusion
+without the trailing `/` never prunes a directory.
+
+Quote patterns so the shell does not expand them. Match literals with `\*`, `\?`,
+`\\`, `\[`, `\]`, `\{`, `\}` and `\!`. Bracket classes, brace expansion and
+negation are unsupported. Unix patterns operate on raw filename bytes and support
+`\xHH`; Windows patterns operate on UTF-16 code units and support `\uHHHH`.
+Thus `?` means one native unit, not one displayed Unicode character. Invalid Unix
+bytes and unpaired Windows UTF-16 units can be matched losslessly. Encoded path
+separators/NUL, absolute paths and `.`/`..` components are rejected; Windows also
+rejects literal backslashes and colons inside components. No Unicode normalization
+or case folding is performed.
+
+Rules are limited to 128 total, 4,096 UTF-8 source bytes each, 64 KiB of source text
+combined and 256 components each. Invalid rules fail before traversal/output
+creation. Depth and size accept unsigned decimal integers, without unit suffixes.
+Selection flags require directory input. The size check uses the entire file, even
+with `--offset`/`--length`, and is repeated on an opened handle before admission.
+Later detectable changes fail the scan rather than silently truncating it.
+
+Skipped entries have reasons `selection_excluded`, `selection_depth`,
+`selection_not_included` or `selection_size`. Existing link, special-file and
+output-tree safety exclusions take precedence. Explicit exclusion wins over depth,
+include and size rules. A pruned directory counts as one observed skip; unvisited
+descendants have unknown counts. Policy skips alone do not change a successful
+exit status, including a selection with no eligible files.
+
+Using any of these flags writes a version-2 manifest with the effective `selection`
+policy (`native_glob_v1`) and `required_capabilities: ["selection_v1"]`. Consumers
+must understand that scope or reject the version. Scans without these flags retain
+version-1 manifests and existing selection behavior. Journal/report schemas are
+unchanged. These controls do not add offline aggregation or retry.
 
 ### Options and traversal
 

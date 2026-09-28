@@ -352,3 +352,48 @@ fn creation_after_discovery_construction_is_observed_and_control_names_stay_nati
     assert!(discovery.next().is_none());
     assert!(discovery.discovery_complete());
 }
+
+#[test]
+fn admission_size_recheck_handles_growth_and_keeps_identity_checks() {
+    let (_temp, _base, roots) = fixture();
+    let path = roots.input().join("sample");
+    fs::write(&path, b"1234").unwrap();
+    let found = candidate(&roots);
+    assert!(!found.exceeds_size_before_admission(4).unwrap());
+    // Same identity growing above the policy cap before admission is a skip.
+    fs::write(&path, b"12345").unwrap();
+    assert!(found.exceeds_size_before_admission(4).unwrap());
+    // The scan still rejects mutation; it cannot silently analyze a stale range.
+    assert_eq!(found.open().err().unwrap().to_string(), "file_changed");
+    assert_eq!(
+        found
+            .exceeds_size_before_admission(100)
+            .err()
+            .unwrap()
+            .to_string(),
+        "file_changed"
+    );
+    // Replacing a path with an oversized different file is an error, not a skip.
+    fs::rename(&path, roots.input().join("old")).unwrap();
+    fs::write(&path, b"123456789").unwrap();
+    assert_eq!(
+        found
+            .exceeds_size_before_admission(4)
+            .err()
+            .unwrap()
+            .to_string(),
+        "file_changed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_size_recheck_rejects_symlink_substitution() {
+    let (_temp, _base, roots) = fixture();
+    let path = roots.input().join("sample");
+    fs::write(&path, b"1234").unwrap();
+    let found = candidate(&roots);
+    fs::rename(&path, roots.input().join("old")).unwrap();
+    std::os::unix::fs::symlink(roots.input().join("old"), &path).unwrap();
+    assert!(found.exceeds_size_before_admission(4).is_err());
+}

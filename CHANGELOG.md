@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add folder-only include/exclude native globs, inclusive logical file-size limits
+  and recursive depth limits, with explicit skip reasons and bounded pattern rules.
+- Record explicit selection policies in version-2 manifests. Scans without selection
+  flags keep version-1 behavior; journal and per-file report schemas stay unchanged.
+- Recheck size on a no-follow opened file before admission while retaining mutation
+  detection before scanning and report publication.
+
 ## 0.5.0 — 2026-09-23
 
 Native folder scanning for analyst-reviewed static triage, with native packages

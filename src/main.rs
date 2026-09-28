@@ -769,7 +769,7 @@ fn main() -> std::process::ExitCode {
         Ok(None) => {}
         Err(e) => {
             eprintln!("binsith: {}", utils::escape_string(&e.to_string()));
-            let folder_requested = ["recursive", "jobs", "output_dir", "progress", "fail_fast"]
+            let folder_requested = binsith::batch::cli::FOLDER_OPTION_IDS
                 .iter()
                 .any(|id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine));
             // Preserve the existing missing/unreadable single-file exit status.

@@ -131,6 +131,10 @@ fn folder_flags_are_rejected_for_files_stdin_and_category_listing() {
             vec!["--output-dir", "reports"],
             vec!["--progress"],
             vec!["--fail-fast"],
+            vec!["--include", "*"],
+            vec!["--exclude", "cache/"],
+            vec!["--max-depth", "0"],
+            vec!["--max-file-bytes", "0"],
         ] {
             let mut argv = vec!["binsith", input];
             argv.extend(flags);

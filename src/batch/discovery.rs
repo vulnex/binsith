@@ -30,6 +30,7 @@ pub enum SkipReason {
     Link,
     SpecialFile,
     OutputTree,
+    Selection(super::selection::SelectionReason),
 }
 
 #[derive(Debug)]
@@ -203,6 +204,7 @@ pub struct Discovery {
     root: PathBuf,
     output: PathBuf,
     recursive: bool,
+    selection: Option<super::selection::Selection>,
     cancellation: CancellationToken,
     pending: Option<DirectoryQueue>,
     initial: Option<PendingDirectory>,
@@ -225,6 +227,7 @@ impl Discovery {
             root: roots.input().to_owned(),
             output: roots.output().to_owned(),
             recursive,
+            selection: None,
             cancellation,
             pending: None,
             initial: Some(PendingDirectory {
@@ -235,6 +238,10 @@ impl Discovery {
             finished: false,
             complete: false,
         })
+    }
+    pub fn with_selection(mut self, selection: Option<super::selection::Selection>) -> Self {
+        self.selection = selection;
+        self
     }
     /// True only after natural exhaustion. Discovery errors are separate events;
     /// a fully traversed tree with errors still cannot yield a successful batch.
@@ -348,7 +355,7 @@ impl Iterator for Discovery {
                 Some(SkipReason::Link)
             } else if absolute == self.output {
                 Some(SkipReason::OutputTree)
-            } else if metadata.is_dir() && !self.recursive {
+            } else if metadata.is_dir() && !self.recursive && self.selection.is_none() {
                 Some(SkipReason::Subdirectory)
             } else if !metadata.is_file() && !metadata.is_dir() {
                 Some(SkipReason::SpecialFile)
@@ -374,11 +381,40 @@ impl Iterator for Discovery {
                     Err(error) => return Some(Self::error(relative, error, false)),
                     _ => {}
                 }
+                if let Some(reason) = self
+                    .selection
+                    .as_ref()
+                    .and_then(|s| s.path_reason(&relative, true))
+                {
+                    return Some(DiscoveryEvent::Skipped {
+                        relative,
+                        reason: SkipReason::Selection(reason),
+                    });
+                }
+                if !self.recursive {
+                    return Some(DiscoveryEvent::Skipped {
+                        relative,
+                        reason: SkipReason::Subdirectory,
+                    });
+                }
                 if let Err(error) = self.queue(&relative, observed) {
                     self.stop();
                     return Some(Self::error(relative, error, true));
                 }
             } else {
+                if let Some(selection) = &self.selection {
+                    let reason = selection.path_reason(&relative, false).or_else(|| {
+                        selection
+                            .size_excluded(metadata.len())
+                            .then_some(super::selection::SelectionReason::Size)
+                    });
+                    if let Some(reason) = reason {
+                        return Some(DiscoveryEvent::Skipped {
+                            relative,
+                            reason: SkipReason::Selection(reason),
+                        });
+                    }
+                }
                 return Some(DiscoveryEvent::File(Candidate {
                     absolute,
                     relative,
