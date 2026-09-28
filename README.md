@@ -1012,6 +1012,22 @@ this USB. An experimental synchronization change did not reliably eliminate the
 timeouts and was not adopted.
 
 
+### Comparing folder-scanner performance
+
+Use the paired harness to compare two release builds with identical synthetic
+inputs, alternating execution order, report-equivalence checks and separate
+resource samples:
+
+```sh
+python3 tools/benchmark_native_folder.py --baseline /path/to/v0.5.0/binsith --baseline-engine native --candidate target/release/binsith --workers 1 4 --runs 5 --output target/scan-comparison.json
+```
+
+This requires macOS/Linux with `wait4`, `ps` and `lsof`. Run on an otherwise-idle
+host. The frozen gates in `tools/folder-performance-gates.json` still apply;
+noisy or missing measurements are inconclusive. Results contain local identity
+and paths, so keep them local. Omitting `--baseline-engine native` retains the
+older external-per-file baseline comparison.
+
 ### Offline export qualification tooling (unreleased)
 
 `tools/benchmark_batch_export.py` measures a fresh export process against synthetic
