@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add native-to-native folder benchmark comparisons with the existing frozen
+  performance gates, paired runs and report-equivalence checks.
+
 - Measure Windows export benchmark peak working set from the completed child,
   and reject unavailable counters instead of reporting a memory-budget pass.
 

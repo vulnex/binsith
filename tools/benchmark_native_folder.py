@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FS-20 paired external/native adapter using frozen FS-04 corpora and numeric gates.
+"""Paired external/native or native/native adapter with frozen FS-04 corpora and gates.
 
 Analysis reports must be equivalent; native journals/manifest are additional measured
 work. Warm timings and separate resource samples; optional synthetic write latency.
@@ -242,6 +242,8 @@ def materialize_input(source, destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline', type=Path, required=True)
+    parser.add_argument('--baseline-engine', choices=('external', 'native'), default='external',
+                        help='use native to compare two folder-scanning builds')
     parser.add_argument('--candidate', type=Path, default=Path('target/release/binsith'))
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--workers', type=int, nargs='+', default=[1, 2, 4, 8])
@@ -271,7 +273,7 @@ def main():
         ('benchmark_folder.py', 'quality_checks.py', 'compare_folder_benchmarks.py'))).hexdigest()
     common = dict(schema_version=2, harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         timing_helper_sha256=helper_hash, platform=platform.platform(), machine=platform.machine(), logical_cpus=os.cpu_count(),
-        settings=dict(adapter_version=6, work_directory=str(work_parent),
+        settings=dict(adapter_version=7, baseline_engine=args.baseline_engine, work_directory=str(work_parent),
                       work_device=work_parent.stat().st_dev, write_delay_us=args.write_delay_us,
                       write_delay_library_sha256=hashlib.sha256(args.write_delay_library.read_bytes()).hexdigest() if args.write_delay_library else None,
                       write_delay_source_sha256=hashlib.sha256(Path(__file__).with_name("slow_output.c").read_bytes()).hexdigest() if args.write_delay_library else None, corpus_version=3, runs=args.runs, workers=args.workers,
@@ -279,14 +281,16 @@ def main():
                       patterns_source_sha256=hashlib.sha256(Path('src/regex_patterns.toml').read_bytes()).hexdigest()))
     results = [dict(common, binary_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
         build=subprocess.check_output([binary, '--version'], text=True).strip(),
-        engine='external' if i == 0 else 'native', scenarios={}) for i, binary in enumerate(binaries)]
+        engine=args.baseline_engine if i == 0 else 'native', scenarios={}) for i, binary in enumerate(binaries)]
     gates = json.loads(Path('tools/folder-performance-gates.json').read_text())
     evidence = {'run_state': 'running', 'expected_scenarios': len(args.workers) * (len(args.workloads) if args.workloads else 7),
         'baseline': results[0], 'candidate': results[1], 'gates': gates,
         'limitations': ['Warm/uncontrolled cache only; optional synthetic per-write latency is not a physical slow disk, bandwidth cap, fsync delay, or cold-cache measurement.',
-            'Equivalent analysis reports; native journals/manifest are additional candidate work included in elapsed time.',
-            'Baseline first-report observation at child exit; native atomic report observed by 1ms filesystem polling.',
-            'External resource totals exclude Python harness; native coordinator is included.',
+            ('Equivalent analysis reports; journals/manifest included for both builds.' if args.baseline_engine == 'native' else
+             'Equivalent analysis reports; native journals/manifest are additional candidate work included in elapsed time.'),
+            ('Both first reports observed by 1ms filesystem polling.' if args.baseline_engine == 'native' else
+             'Baseline first-report observation at child exit; native atomic report observed by 1ms filesystem polling.'),
+            'Resource totals exclude Python harness; native coordinators are included.',
             'Profile samples never enter timing medians; resource samples can miss transient peaks.',
             'Effective analysis configuration compared; CLI transport options/build provenance excluded; encoding spelling normalized; both pattern fingerprints independently verified against bundled source; entropy tolerance 1e-12.']}
     with args.output.open('x') as output, tempfile.TemporaryDirectory(prefix='binsith-native-bench-', dir=work_parent) as temporary:
@@ -336,9 +340,10 @@ def main():
                     for index in ([0, 1] if iteration % 2 == 0 else [1, 0]):
                         with tempfile.TemporaryDirectory(dir=root, prefix='output-') as folder:
                             destination = Path(folder) / 'reports'
-                            metric = storage_measure(measure if index == 0 else native_measure,
+                            native = results[index]['engine'] == 'native'
+                            metric = storage_measure(native_measure if native else measure,
                                 binaries[index], samples, destination, workers, args.timeout, flags, profiling, args)
-                            signature = analysis_signature(destination, samples, index == 1)
+                            signature = analysis_signature(destination, samples, native)
                             if reference is None:
                                 reference = signature
                             else:
@@ -358,7 +363,7 @@ def main():
                 output.truncate()
                 output.flush()
                 medians = [statistics.median(s['elapsed_seconds'] for s in r['scenarios'][key]['samples']) for r in results]
-                print(f'{key}: external={medians[0]:.3f}s native={medians[1]:.3f}s {evidence["comparison"]["scenarios"][key]["status"]}', flush=True)
+                print(f'{key}: baseline({args.baseline_engine})={medians[0]:.3f}s candidate(native)={medians[1]:.3f}s {evidence["comparison"]["scenarios"][key]["status"]}', flush=True)
         evidence['run_state'] = 'complete'
         output.seek(0)
         json.dump(evidence, output, indent=2)
