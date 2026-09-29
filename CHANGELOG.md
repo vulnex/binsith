@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Remap local build paths for release binaries and reject identifying paths and
+  archive owner metadata during packaging. Keep intentional author attribution.
+  Apply the package checks to native macOS, Linux and Windows builds.
+
 - Exercise Windows long-path descendants using extended paths for fixture setup
   and cleanup, without changing system settings or the scanner root path.
 - Exclude private tester packages from Git and source archives, and stop CI
