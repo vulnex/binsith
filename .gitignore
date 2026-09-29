@@ -1,4 +1,5 @@
 /target
+/tools/__pycache__/
 .DS_Store
 /fuzz/target/
 /fuzz/corpus/
