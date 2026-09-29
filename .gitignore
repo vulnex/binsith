@@ -4,6 +4,8 @@
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+# libFuzzer multi-job logs can contain local paths and generated inputs.
+/fuzz-*.log
 
 # Local malware-derived analysis; never publish or commit these exports.
 /evaluations/
