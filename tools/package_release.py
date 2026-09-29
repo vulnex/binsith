@@ -25,6 +25,7 @@ import tempfile
 import zipfile
 
 from check_folder_examples import check_examples
+from check_package_privacy import check_archive, check_content
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SUPPORTED = {'aarch64-apple-darwin', 'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc'}
@@ -79,6 +80,7 @@ def package(root):
         for source in files.values():
             if source.is_symlink() or not source.is_file():
                 raise SystemExit(f'Not a regular release input: {source.name}')
+            check_content(source.name, source.read_bytes())
         if windows:
             with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as package_file:
                 for filename, source in files.items():
@@ -91,6 +93,7 @@ def package(root):
                     info.uname = info.gname = ''
                     with source.open('rb') as stream:
                         package_file.addfile(info, stream)
+        check_archive(archive)
         # Read back only the exact allowlist. Do not extract arbitrary archive paths.
         expected = {name+'/'+filename for filename in files}
         contents = {}

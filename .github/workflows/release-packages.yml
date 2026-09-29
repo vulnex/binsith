@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/release-packages.yml'
       - 'tools/package_release.py'
+      - 'tools/build_release.py'
+      - 'tools/check_package_privacy.py'
+      - 'tools/test_package_privacy.py'
       - 'tools/check_folder_examples.py'
       - 'README.md'
       - 'Cargo.toml'
@@ -13,6 +16,9 @@ on:
     paths:
       - '.github/workflows/release-packages.yml'
       - 'tools/package_release.py'
+      - 'tools/build_release.py'
+      - 'tools/check_package_privacy.py'
+      - 'tools/test_package_privacy.py'
       - 'tools/check_folder_examples.py'
       - 'README.md'
       - 'Cargo.toml'
@@ -26,6 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-14
+            target: aarch64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
@@ -50,12 +58,17 @@ jobs:
         working-directory: release-source
         run: python tools/check_repository_privacy.py
       - run: rustup toolchain install stable --profile minimal
+      - name: Verify package privacy checks
+        working-directory: release-source
+        run: python -m unittest discover -s tools -p 'test_package_privacy.py'
       - name: Verify release source
         working-directory: release-source
         run: cargo +stable test --release --locked
       - name: Build native release binary
         working-directory: release-source
-        run: cargo +stable build --release --locked
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/build_release.py
       - name: Check JSON and CSV consumers
         run: python release-source/tools/check_export_compatibility.py
       - name: Package and smoke-test extracted binary

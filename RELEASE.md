@@ -83,8 +83,18 @@ local evidence is not a substitute for final-commit CI and package verification.
 ## Package
 
 ```sh
+python3 tools/build_release.py
 python3 tools/package_release.py
 ```
+
+The release build remaps local home, Cargo, toolchain and checkout paths before
+compilation. Ordinary Cargo release builds can embed usernames in panic locations.
+The packager rejects identifying paths in UTF-8/UTF-16 content and archive owner
+metadata before writing checksums. Existing archives can be checked without
+extracting or executing them using `python3 tools/check_package_privacy.py ARCHIVE`.
+This targeted gate does not prove absence of every kind of PII: review documents,
+intentional copyright attribution and image metadata before publication. Previously
+published binaries need rebuilding; changing the packager does not sanitize them.
 
 The packager supports native macOS ARM64 (`aarch64-apple-darwin`), Linux x86-64
 (`x86_64-unknown-linux-gnu`), and Windows x86-64 (`x86_64-pc-windows-msvc`).
@@ -95,7 +105,7 @@ against the extracted binary. Their build and content hashes and check results
 are saved as `dist/folder-examples-<target>.json` locally. Raw qualification
 reports can contain machine paths and are not uploaded as CI artifacts.
 
-The `Release packages` workflow builds Linux and Windows artifacts from the
+The `Release packages` workflow builds macOS ARM64, Linux and Windows artifacts from the
 immutable workflow commit (`github.sha`), using the packaging script from that
 same commit. It uploads CI artifacts only; publishing
 them to GitHub Releases is a separate step. Linux is built on Ubuntu 22.04.
