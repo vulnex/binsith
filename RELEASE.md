@@ -110,7 +110,12 @@ reports can contain machine paths and are not uploaded as CI artifacts.
 
 The `Release packages` workflow builds macOS ARM64, Linux and Windows artifacts from the
 immutable workflow commit (`github.sha`), using the packaging script from that
-same commit. It uploads CI artifacts only; publishing
+same commit. For a historical rebuild, dispatch the current workflow with
+`source_commit` set to the full commit SHA resolved from the release tag. It
+verifies the checkout identity and applies the current privacy-safe build and
+packaging tools externally, without changing the tagged source or tag. The
+embedded revision and source fingerprint must match that historical source.
+It uploads CI artifacts only; publishing
 them to GitHub Releases is a separate step. Linux is built on Ubuntu 22.04.
 For publication, use the successful post-merge run whose commit matches the
 release tag; PR runs package their temporary merge commit and must not be published.
