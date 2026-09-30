@@ -9,6 +9,11 @@ Analyze hashes, MIME signatures, strings, indicators, encoded content, hex dumps
 regional entropy, and differences between files, with JSON/CSV exports.
 It does not inspect executable headers, sections, imports, or entry points.
 
+Scan a single file or an entire folder. Folder scans support recursive traversal,
+parallel workers, progress reporting and a separate JSON report for each file.
+Start with the [single-file quickstart](#quickstart-analyze-synthetic-input) or the
+[folder-scanning examples](#folder-scanning).
+
 See the [release notes](CHANGELOG.md) and [release procedure](RELEASE.md)
 for compatibility changes, packaging instructions, and promotion gates.
 
@@ -42,7 +47,7 @@ report storage and terminal rendering. Throughput and memory vary with hardware,
 input content, enabled modes, custom patterns, and output destination; these are
 observations, not guaranteed bounds or cross-platform benchmark results.
 
-The development CLI also accepts a directory with `--output-dir`, using bounded
+The CLI also accepts a directory with `--output-dir`, using bounded
 native scan workers. Recursive traversal, per-file JSON reports, outcome journals
 and cooperative interruption are available.
 Combined analysis modes can require temporary disk space proportional to the
@@ -52,11 +57,20 @@ and benchmark reproduction instructions.
 
 ## Download
 
-[Download the latest release](https://github.com/vulnex/binsith/releases/latest).
-The repository is currently private; sign in with a GitHub account that has access.
-Download the archive for your platform and `SHA256SUMS` from the same release.
+[Release history](https://github.com/vulnex/binsith/releases).
+The native archives for 0.4.2-rc.1, 0.4.2 and 0.5.0 were withdrawn on
+2026-09-30 because their binaries embedded identifying build paths. Their
+checksums were withdrawn with them. **Those release pages currently provide
+source only; no replacement release binaries have been published.**
 
-| Platform | 0.5.0 archive |
+For now, [build from source](#build-and-verify). New native development packages
+for macOS, Linux and Windows pass the package privacy checks, but include
+unreleased functionality and are not replacements for the historical tags.
+When replacement release archives become available, download the archive and
+`SHA256SUMS` from the same release. The examples below illustrate the filename
+and verification conventions using the withdrawn 0.5.0 archives.
+
+| Platform | Historical 0.5.0 archive (withdrawn) |
 | --- | --- |
 | macOS, Apple Silicon (ARM64) | `binsith-0.5.0-aarch64-apple-darwin.tar.gz` |
 | Linux, x86-64 (built on Ubuntu 22.04) | `binsith-0.5.0-x86_64-unknown-linux-gnu.tar.gz` |
@@ -93,8 +107,8 @@ Set-Location .\binsith-0.5.0-x86_64-pc-windows-msvc
 .\binsith.exe --version
 ```
 
-These examples use 0.5.0 filenames. For a newer release, substitute the filenames
-shown on its release page. To build locally, see [Build and verify](#build-and-verify).
+These examples use historical 0.5.0 filenames. For a future replacement release,
+substitute the filenames shown on its release page.
 
 ## Quickstart: analyze synthetic input
 
@@ -164,8 +178,14 @@ binsith -s --jsonl sample.bin                    # Machine output on stdout
 binsith -s --jsonl -q -j findings.jsonl sample.bin
 binsith --category URL -q --match-exit-code 3 --no-match-exit-code 4 sample.bin
 binsith before.bin --compare after.bin -q -j comparison.json
+binsith samples --output-dir reports            # Summarize top-level files
+binsith samples --output-dir reports-recursive --recursive -s --jobs 4 --progress
 cat sample.bin | binsith -s -
 ```
+
+For directory input, `--output-dir` is required. Use a fresh destination for each
+scan. See [Folder scanning](#folder-scanning) for synthetic examples, Windows
+commands, output artifacts and completion checks.
 
 `--encoding`, `--scan-utf16`, `--category`, `--compare`, and nondefault match exit
 codes enable string analysis. `-S` retains matching strings and truncation notices;
@@ -628,6 +648,43 @@ Windows x86-64. Use the extracted binary or put it on your `PATH`. To build from
 source, run `cargo build --locked --release` and use `target/release/binsith`.
 See the filesystem and cancellation limitations below before scanning large trees.
 
+### Scan an existing folder
+
+These commands work with a binary on your `PATH`. From an extracted package,
+use `./binsith` on macOS/Linux or `.\binsith.exe` in PowerShell instead.
+Replace `samples` with your input folder, and choose a new output folder for
+each run. Paths containing spaces must be quoted.
+
+```sh
+# Hashes, size and MIME summary for top-level files only.
+binsith samples --output-dir reports-summary
+
+# Strings and indicators in the entire tree, with four workers and progress.
+binsith samples --output-dir reports-strings --recursive -s --jobs 4 --progress
+
+# Focus on URL and IPv4 indicators; category selection enables string analysis.
+binsith samples --output-dir reports-network --recursive --category URL,ip_address
+
+# Add regional entropy, using one worker for a storage-constrained scan.
+binsith samples --output-dir reports-entropy --recursive -s --entropy --jobs 1
+```
+
+| Option | Folder behavior |
+| --- | --- |
+| `--output-dir PATH` | Required new or empty destination for this batch's reports. A completed output directory cannot be reused. |
+| `--recursive` | Include subdirectories; the default visits only top-level files. |
+| `-s` | Extract strings and indicators in each file. Without an analysis option, the default is summary-only. |
+| `--category URL,ip_address` | Enable string analysis and retain matching categories. |
+| `--jobs N` | Limit concurrent file scans; the default is available CPUs capped at four. |
+| `--progress` | Show progress on stderr, including when redirected or combined with `--quiet`. |
+| `--fail-fast` | Stop admitting work after the first file/discovery error. By default, other files continue. |
+| `-q`, `--quiet` | Suppress the human summary and automatic progress; still write reports. |
+
+Hidden files are included. Symlinks and special files are skipped, and scanned
+files are never executed. Folder mode writes artifacts under `--output-dir`;
+it does not use `-j`, single-file `--export-indicators`, or JSONL stdout.
+Reports can contain extracted secrets and paths, so choose protected storage.
+
 ### Try a small folder
 
 Run these macOS/Linux examples in a directory where `folder-demo` does not exist.
@@ -669,6 +726,40 @@ binsith folder-demo/input --output-dir folder-demo/limited --recursive -s --max-
 This command returns **1**. It still finishes orchestration and retains reports;
 the URL and IP strings exceed the limit and are marked limited. An empty match
 list in a limited report does not establish absence of indicators.
+
+### Windows PowerShell example
+
+From the extracted package directory, create the same synthetic three-file tree
+in a location where `folder-demo` does not already exist:
+
+```powershell
+New-Item -ItemType Directory -Path .\folder-demo\input\nested | Out-Null
+Set-Content .\folder-demo\input\url.txt 'https://example.org/download' -Encoding ascii
+Set-Content .\folder-demo\input\plain.txt 'hello' -Encoding ascii
+Set-Content .\folder-demo\input\nested\address.txt '192.0.2.10' -Encoding ascii
+
+.\binsith.exe .\folder-demo\input --output-dir .\folder-demo\recursive --recursive -s --jobs 4 --progress
+$scanExitCode = $LASTEXITCODE
+$manifest = Get-Content .\folder-demo\recursive\manifest.json -Raw | ConvertFrom-Json
+$manifest | Select-Object status, discovery_complete
+$manifest.counters
+"Scan exit code: $scanExitCode"
+
+Get-Content .\folder-demo\recursive\files.jsonl | ForEach-Object {
+    $record = $_ | ConvertFrom-Json
+    if ($record.record_type -eq 'terminal') {
+        [PSCustomObject]@{
+            File = $record.display_path
+            Status = $record.outcome.status
+            Report = $record.outcome.report.location
+        }
+    }
+}
+```
+
+Expect exit code `0`, manifest status `complete`, three complete file reports,
+and two files with actionable indicators. Resolve each `Report` location relative
+to `folder-demo\recursive`. Use a different output directory when rerunning.
 
 ### Locate reports and interpret completion
 
@@ -731,8 +822,14 @@ These options require a build from the current source; published 0.5.0 packages
 remain unchanged. For example:
 
 ```sh
-binsith samples --recursive --include '**/*.exe' --include '**/*.dll' --exclude '**/cache/' --max-depth 4 --max-file-bytes 104857600 --output-dir selected-reports
+binsith samples --recursive -s --include '**/*.exe' --include '**/*.dll' --exclude '**/cache/' --max-depth 4 --max-file-bytes 104857600 --output-dir selected-reports
 ```
+
+This scans strings and indicators in selected `.exe` and `.dll` files up to
+100 MiB each, prunes cache directories, and limits recursive file depth to four.
+Omit `-s` for summary-only reports. These selection controls and the combined
+batch export below are development features, separate from the folder scanning
+already available in published 0.5.0 packages.
 
 | Option | Meaning |
 | --- | --- |

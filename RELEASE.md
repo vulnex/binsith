@@ -1,8 +1,11 @@
 # Release procedure
 
-Version **0.5.0** adds native folder scanning. Preserve published 0.4.2 assets;
-use a separate `v0.5.0` tag and release. Publish only after the final committed
-inputs and packages pass the gates below.
+Version **0.5.0** introduced native folder scanning. Historical 0.4.2-rc.1,
+0.4.2 and 0.5.0 native archives and checksums were withdrawn on 2026-09-30
+because they embedded identifying build paths. Keep those originals private;
+do not re-upload them. The tags remain available as source releases.
+Publish replacement binaries only after their final committed inputs and
+packages pass the gates below, with accurate source and version identity.
 The supported role remains static triage with analyst review. See CHANGELOG.md
 for consumer-visible behavior changes.
 
