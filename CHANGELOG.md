@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Restore v0.5.0 native downloads using the unchanged tagged source and current
+  privacy-safe packaging tools. The rebuilt archives have new SHA-256 checksums;
+  they do not contain unreleased selection or batch-export features.
+
 - Withdraw historical native release downloads and checksums containing identifying
   build paths, and remove outdated CI artifacts and identifying workflow logs.
   Preserve reviewed development packages and intentional author attribution.

@@ -3,7 +3,9 @@
 Version **0.5.0** introduced native folder scanning. Historical 0.4.2-rc.1,
 0.4.2 and 0.5.0 native archives and checksums were withdrawn on 2026-09-30
 because they embedded identifying build paths. Keep those originals private;
-do not re-upload them. The tags remain available as source releases.
+do not re-upload them. The v0.5.0 archives have since been rebuilt from the
+unchanged tagged source with build-path remapping and new checksums. Versions
+0.4.2-rc.1 and 0.4.2 remain source-only.
 Publish replacement binaries only after their final committed inputs and
 packages pass the gates below, with accurate source and version identity.
 The supported role remains static triage with analyst review. See CHANGELOG.md

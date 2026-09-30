@@ -57,20 +57,18 @@ and benchmark reproduction instructions.
 
 ## Download
 
-[Release history](https://github.com/vulnex/binsith/releases).
-The native archives for 0.4.2-rc.1, 0.4.2 and 0.5.0 were withdrawn on
-2026-09-30 because their binaries embedded identifying build paths. Their
-checksums were withdrawn with them. **Those release pages currently provide
-source only; no replacement release binaries have been published.**
+[Download v0.5.0](https://github.com/vulnex/binsith/releases/tag/v0.5.0).
+The macOS, Linux and Windows archives were rebuilt on 2026-09-30 from the exact
+v0.5.0 tagged source, with identifying build paths removed. Download the archive
+for your platform and `SHA256SUMS` from that release together: the rebuilt files
+have new checksums. Intentional author attribution is retained.
 
-For now, [build from source](#build-and-verify). New native development packages
-for macOS, Linux and Windows pass the package privacy checks, but include
-unreleased functionality and are not replacements for the historical tags.
-When replacement release archives become available, download the archive and
-`SHA256SUMS` from the same release. The examples below illustrate the filename
-and verification conventions using the withdrawn 0.5.0 archives.
+The original archives were withdrawn; do not reuse their checksums. Versions
+0.4.2-rc.1 and 0.4.2 remain source-only. These rebuilt v0.5.0 binaries do not
+include the unreleased selection and batch-export features described below.
+To use those development features, [build from source](#build-and-verify).
 
-| Platform | Historical 0.5.0 archive (withdrawn) |
+| Platform | Rebuilt 0.5.0 archive |
 | --- | --- |
 | macOS, Apple Silicon (ARM64) | `binsith-0.5.0-aarch64-apple-darwin.tar.gz` |
 | Linux, x86-64 (built on Ubuntu 22.04) | `binsith-0.5.0-x86_64-unknown-linux-gnu.tar.gz` |
@@ -107,8 +105,8 @@ Set-Location .\binsith-0.5.0-x86_64-pc-windows-msvc
 .\binsith.exe --version
 ```
 
-These examples use historical 0.5.0 filenames. For a future replacement release,
-substitute the filenames shown on its release page.
+These examples use 0.5.0 filenames. For a newer release, substitute the filenames
+shown on its release page.
 
 ## Quickstart: analyze synthetic input
 
