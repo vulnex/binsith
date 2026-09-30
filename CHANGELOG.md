@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Withdraw historical native release downloads and checksums containing identifying
+  build paths, and remove outdated CI artifacts and identifying workflow logs.
+  Preserve reviewed development packages and intentional author attribution.
+- Expand the folder-scanning guide with common workflows and PowerShell examples.
+
 - Remap local build paths for release binaries and reject identifying paths and
   archive owner metadata during packaging. Keep intentional author attribution.
   Apply the package checks to native macOS, Linux and Windows builds.
