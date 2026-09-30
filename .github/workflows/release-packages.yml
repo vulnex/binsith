@@ -1,6 +1,11 @@
 name: Release packages
 on:
   workflow_dispatch:
+    inputs:
+      source_commit:
+        description: 'Optional full source commit SHA for rebuilding a historical release'
+        required: false
+        type: string
   push:
     paths:
       - '.github/workflows/release-packages.yml'
@@ -25,6 +30,8 @@ on:
       - 'Cargo.lock'
 permissions:
   contents: read
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   package:
     timeout-minutes: 20
@@ -48,9 +55,21 @@ jobs:
       - name: Check out the workflow source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_commit || github.sha }}
           path: release-source
           fetch-depth: 0
+      - name: Verify immutable source selection
+        env:
+          EXPECTED_SOURCE: ${{ inputs.source_commit || github.sha }}
+        shell: python
+        run: |
+          import os, re, subprocess
+          expected = os.environ['EXPECTED_SOURCE']
+          if not re.fullmatch(r'[0-9a-f]{40}', expected):
+              raise SystemExit('Source must be a full immutable commit SHA')
+          actual = subprocess.check_output(['git', '-C', 'release-source', 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != expected:
+              raise SystemExit('Source checkout identity mismatch')
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -59,16 +78,15 @@ jobs:
         run: python tools/check_repository_privacy.py
       - run: rustup toolchain install stable --profile minimal
       - name: Verify package privacy checks
-        working-directory: release-source
+        working-directory: packaging-tools
         run: python -m unittest discover -s tools -p 'test_package_privacy.py'
       - name: Verify release source
         working-directory: release-source
         run: cargo +stable test --release --locked
       - name: Build native release binary
-        working-directory: release-source
         env:
           RUSTUP_TOOLCHAIN: stable
-        run: python tools/build_release.py
+        run: python packaging-tools/tools/build_release.py --root release-source
       - name: Check JSON and CSV consumers
         run: python release-source/tools/check_export_compatibility.py
       - name: Package and smoke-test extracted binary

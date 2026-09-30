@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Build release binaries with machine-specific source paths remapped."""
+import argparse
 import os
 from pathlib import Path
 import shlex
 import subprocess
 
 
-def build():
-    root = Path(__file__).resolve().parents[1]
+def build(root):
+    root = root.resolve(strict=True)
     home = Path.home()
     env = os.environ.copy()
     encoded = env.get('CARGO_ENCODED_RUSTFLAGS')
@@ -28,4 +29,7 @@ def build():
 
 
 if __name__ == '__main__':
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1],
+                        help='Unmodified source checkout to build')
+    build(parser.parse_args().root)
