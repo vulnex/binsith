@@ -198,7 +198,19 @@ def console_interrupt(binary, base):
                 time.sleep(.02)
             child.send_signal(signal.CTRL_BREAK_EVENT)
             assert child.wait(timeout=15) == 130
-            manifest = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
+            # After wait() returns, Windows may need a moment to fully release file handles.
+            # Retry with exponential backoff to handle this OS-level cleanup race.
+            manifest = None
+            for attempt in range(10):
+                try:
+                    manifest = json.loads((output / 'manifest.json').read_text(encoding='utf-8'))
+                    break
+                except PermissionError:
+                    if attempt < 9:
+                        time.sleep(0.01 * (2 ** attempt))  # 10ms, 20ms, 40ms, ..., up to ~5s total
+                    else:
+                        raise
+            assert manifest is not None
             assert manifest['status'] == 'incomplete'
             assert 'interrupted' in manifest['stop_reasons']
             assert manifest['counters']['cancelled'] == 3
